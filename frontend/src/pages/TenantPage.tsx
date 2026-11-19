@@ -531,6 +531,7 @@ export const TenantPage: React.FC = () => {
       penaltyRate: '',
     })
     setFormErrors({})
+    setIsReviewingAdd(false)
     setIsAddModalOpen(true)
   }
 
@@ -1688,8 +1689,8 @@ export const TenantPage: React.FC = () => {
                                   <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
                                     <div className="inline-flex items-center justify-center">
                                       <RowActionsMenu
-                                        canEdit
-                                        canDelete
+                                        canEdit={!rec.isLocked}
+                                        canDelete={!rec.isLocked}
                                         onEdit={() => handleOpenEditRecord(rec)}
                                         onDelete={() => setRemoveTarget({ kind: 'record', record: rec })}
                                         editLabel="Edit Payment"
@@ -2058,7 +2059,7 @@ export const TenantPage: React.FC = () => {
                         type="button"
                         variant="primary"
                         size="sm"
-                        onClick={() => setIsAddModalOpen(true)}
+                        onClick={handleOpenAdd}
                         className="rounded-[10px]"
                       >
                         New Tenant Lease
@@ -2131,6 +2132,16 @@ export const TenantPage: React.FC = () => {
                           const isFlagged = tenant.auditStatus === 'Flagged'
 
                           if (!isVerified && !isFlagged) {
+                            if (tenant.isLocked) {
+                              return (
+                                <span
+                                  title="Locked: a payment on this lease is already in Sales and has been Verified by an Auditor"
+                                  className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 whitespace-nowrap cursor-help"
+                                >
+                                  Sales Verified
+                                </span>
+                              )
+                            }
                             return <span className="text-xs text-muted-fg/40 font-mono">-</span>
                           }
 
@@ -2320,15 +2331,27 @@ export const TenantPage: React.FC = () => {
                 </button>
                 <button
                   type="button"
+                  disabled={Boolean(activeTenant.isLocked)}
+                  title={
+                    activeTenant.isLocked
+                      ? "Locked: a payment on this lease is already in Sales and has been Verified by an Auditor"
+                      : undefined
+                  }
                   onClick={(e) => {
+                    if (activeTenant.isLocked) return
                     handleOpenDelete(activeTenant, e)
                     setMenuOpenTenantId(null)
                     setMenuPosition(null)
                   }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+                  className={cn(
+                    'w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors text-left',
+                    activeTenant.isLocked
+                      ? 'text-muted-fg/50 cursor-not-allowed'
+                      : 'text-rose-600 hover:bg-rose-50 cursor-pointer'
+                  )}
                 >
-                  <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                  <span>Delete Lease</span>
+                  <Trash2 className={cn('w-3.5 h-3.5 shrink-0', activeTenant.isLocked ? 'text-muted-fg/50' : 'text-rose-600')} />
+                  <span>{activeTenant.isLocked ? 'Delete Locked (Sales Verified)' : 'Delete Lease'}</span>
                 </button>
               </>
             )}
@@ -2340,7 +2363,13 @@ export const TenantPage: React.FC = () => {
       )}
 
       {/* MODAL 1: New Tenant Lease (Matching system modal UI) */}
-      <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
+      <Dialog
+        open={isAddModalOpen}
+        onOpenChange={(open) => {
+          setIsAddModalOpen(open)
+          if (!open) setIsReviewingAdd(false)
+        }}
+      >
         <DialogContent className="sm:max-w-[680px] rounded-[24px] p-6 sm:p-7 bg-white border border-stroke/50 shadow-modal max-h-[85vh] overflow-y-auto">
           <DialogHeader className="text-left pb-3 border-b border-stroke/30 pr-7">
             <div className="flex items-center gap-3">
@@ -2366,11 +2395,28 @@ export const TenantPage: React.FC = () => {
                 errorMessage={formErrors.form}
                 items={[
                   { label: 'Tenant Name', value: formData.tenantName.trim(), highlight: true },
-                  { label: 'Unit / Stall', value: formData.unitName },
-                  { label: 'Rent Amount', value: formatPHP(parseFloat(formData.rentAmount) || 0), isCurrency: true },
-                  { label: 'Total Payable', value: formatPHP(parseFloat(formData.totalAmountPayable) || 0), isCurrency: true },
-                  { label: 'Schedule', value: `${formData.repeat} (Due: ${formData.dueDate})` },
-                  { label: 'Notes', value: formData.notes || 'None' },
+                  { label: 'Unit / Stall', value: formData.unitName.trim() },
+                  {
+                    label:
+                      formData.repeat === 'Daily'
+                        ? 'Daily Rent'
+                        : formData.repeat === 'Monthly'
+                          ? 'Monthly Rent'
+                          : 'Rent Amount',
+                    value: formatPHP(parseFloat(formData.rentAmount) || 0),
+                    isCurrency: true,
+                  },
+                  { label: 'Payment Schedule', value: formData.repeat },
+                  { label: 'Total Payable', value: formatPHP(getFormPayable()), isCurrency: true },
+                  {
+                    label: 'Lease Term',
+                    value:
+                      formData.repeat !== 'None' && formData.leaseEndDate
+                        ? `${formData.contractDate} to ${formData.leaseEndDate}`
+                        : formData.contractDate,
+                  },
+                  { label: 'First Due Date', value: formData.dueDate },
+                  { label: 'Notes', value: formData.notes.trim() || 'None' },
                 ]}
               />
             ) : (

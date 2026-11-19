@@ -20,7 +20,7 @@ from app.core.cache import system_cache
 from app.core.dependencies import get_current_user
 from app.db.session import Base, get_db
 from app.models.company import Company
-from app.models.finance import Category, Expense, Sale
+from app.models.finance import Category, CompanyCategory, Expense, Sale
 
 SUPERVISOR = {"user_id": 3, "email": "s@mct.test", "role": "supervisor", "is_admin": False,
               "company_id": 1, "company_ids": [1]}
@@ -37,6 +37,9 @@ def client():
         Category(category_id=1, name="Room"),
         Category(category_id=2, name="Food"),
         Category(category_id=3, name="Supplies"),
+        CompanyCategory(company_id=1, category_type="sales", name="Room"),
+        CompanyCategory(company_id=1, category_type="sales", name="Food"),
+        CompanyCategory(company_id=1, category_type="expense", name="Supplies"),
         Sale(company_id=1, category_id=1, amount=Decimal("750.00"), transaction_date=date(2026, 11, 1),
              particulars="Room [Paid]", payment_status="Paid", deposit_status="Deposited"),
         Sale(company_id=1, category_id=2, amount=Decimal("250.00"), transaction_date=date(2026, 11, 2),

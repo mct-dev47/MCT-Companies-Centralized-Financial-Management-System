@@ -272,7 +272,7 @@ class NotificationService:
             )
         cache_key = f"notif_settings:c:{company_id}"
         cached = system_cache.get(cache_key)
-        if cached is not None and getattr(cached, "id", 0) > 0:
+        if cached is not None:
             return cached
         try:
             row = (
@@ -289,7 +289,7 @@ class NotificationService:
                     tags=["notif_settings", f"notif_settings:c:{company_id}"],
                 )
                 return out
-            return CompanyNotificationSettingsOut(
+            default_out = CompanyNotificationSettingsOut(
                 id=0,
                 company_id=company_id,
                 transaction_alerts=True,
@@ -297,8 +297,15 @@ class NotificationService:
                 daily_summary=False,
                 audit_alerts=True,
             )
+            system_cache.set(
+                cache_key,
+                default_out,
+                ttl=300,
+                tags=["notif_settings", f"notif_settings:c:{company_id}"],
+            )
+            return default_out
         except Exception:
-            return CompanyNotificationSettingsOut(
+            default_out = CompanyNotificationSettingsOut(
                 id=0,
                 company_id=company_id,
                 transaction_alerts=True,
@@ -306,6 +313,13 @@ class NotificationService:
                 daily_summary=False,
                 audit_alerts=True,
             )
+            system_cache.set(
+                cache_key,
+                default_out,
+                ttl=300,
+                tags=["notif_settings", f"notif_settings:c:{company_id}"],
+            )
+            return default_out
 
     def _get_disabled_notification_types(self, company_id: Optional[int]) -> set[str]:
         if not company_id:

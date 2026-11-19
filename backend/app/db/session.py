@@ -233,9 +233,13 @@ def init_db():
             if "source_loan_repayment_id" not in bank_tx_cols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_loan_repayment_id INTEGER"))
+            if "source_receivable_payment_id" not in bank_tx_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_receivable_payment_id INTEGER"))
             try:
                 with engine.begin() as conn:
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_loan_repayment_id ON bank_transactions(source_loan_repayment_id)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_receivable_payment_id ON bank_transactions(source_receivable_payment_id)"))
             except Exception as exc:
                 logging.getLogger(__name__).warning("Index on bank_transactions.source_loan_repayment_id skipped: %s", exc)
             if "audit_status" not in bank_tx_cols:
@@ -382,6 +386,12 @@ def init_db():
                     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_expenses_linked_topup ON expenses(linked_topup_id)"))
                 except Exception:
                     pass
+
+        if "loan" in table_names:
+            loan_cols = {col["name"] for col in inspector.get_columns("loan")}
+            if "borrower_bank_account_id" not in loan_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE loan ADD COLUMN borrower_bank_account_id VARCHAR(100)"))
 
         if "loans_repayments" in table_names:
             lr_cols = {col["name"] for col in inspector.get_columns("loans_repayments")}

@@ -198,6 +198,26 @@ def test_verified_payment_blocks_moving_the_lease_bank(db):
     with pytest.raises(HTTPException) as e:
         svc.update_lease(lease["lease_id"], LeaseUpdate(bank_account_id="bnk-jk2"), USER)
     assert e.value.status_code == 409
+
+
+def test_lease_and_payment_expose_is_locked_when_linked_sale_is_verified(db):
+    svc, lease = _lease(db)
+    out = svc.add_payment(lease["lease_id"], PaymentIn(payment_date=TODAY, amount=500), USER)
+    assert out["is_locked"] is False
+    assert out["payments"][0]["is_locked"] is False
+
+    sale_id = out["payments"][0]["sale_id"]
+    db.get(Sale, sale_id).audit_status = "Verified"
+    db.commit()
+
+    refreshed = svc.get_lease(lease["lease_id"], USER)
+    assert refreshed["audit_status"] == "Pending Audit"
+    assert refreshed["is_locked"] is True
+    assert refreshed["payments"][0]["is_locked"] is True
+
+    listed = svc.list_leases([1])
+    assert listed[0]["is_locked"] is True
+    assert listed[0]["payments"][0]["is_locked"] is True
     db.expire_all()
     assert db.get(Sale, sale_id).bank_account_id == "bnk-jk"
     assert svc.get_lease(lease["lease_id"], USER)["bank_account_id"] == "bnk-jk"

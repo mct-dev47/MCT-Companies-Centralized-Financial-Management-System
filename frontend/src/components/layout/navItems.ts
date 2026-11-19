@@ -15,7 +15,11 @@ import {
   Receipt,
 } from 'lucide-react'
 import type * as React from 'react'
-import { isFilCapCompany, isJKPropertyCompany } from '@/config/companyFeatures'
+import {
+  isFilCapCompany,
+  isJKPropertyCompany,
+  isSalesEnabledCompany,
+} from '@/config/companyFeatures'
 
 export interface NavSubItem {
   id: string
@@ -210,9 +214,11 @@ export function getSidebarNavSections(
   const operationsItems: NavItem[] = []
 
   if (isAudit) {
-    // Audit has view-only oversight over all core operations
+    // Audit has view-only oversight over core operations (excluding Sales for FilCap and JK)
+    if (isSalesEnabledCompany(targetCompany)) {
+      operationsItems.push(NAV_ITEM_SALES)
+    }
     operationsItems.push(
-      NAV_ITEM_SALES,
       NAV_ITEM_RECEIVABLES,
       NAV_ITEM_EXPENSE,
       NAV_ITEM_LOAN,
@@ -225,7 +231,7 @@ export function getSidebarNavSections(
     }
   } else {
     // Filcap (Lending) and JK do not have the Sales page per business specifications
-    if (!isFilCap && !isJK) {
+    if (isSalesEnabledCompany(targetCompany)) {
       // Sales and Food Receivables under Operations for Finance, Supervisors
       operationsItems.push(NAV_ITEM_SALES, NAV_ITEM_RECEIVABLES)
     }

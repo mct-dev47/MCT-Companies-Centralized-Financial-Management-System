@@ -28,7 +28,7 @@ import {
   type LoanItem,
   type CompanyOption,
 } from '@/services/loanService'
-import { bankService, isAccountOwnedBy, type BankAccount } from '@/services/bankService'
+import { bankService, isAccountOwnedBy, preferSoleOwnedBanks, type BankAccount } from '@/services/bankService'
 import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
@@ -126,6 +126,9 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
   const [particulars, setParticulars] = React.useState('')
   const [amount, setAmount] = React.useState('')
   const [borrowerCompany, setBorrowerCompany] = React.useState(defaultBorrower)
+  const [borrowerBankId, setBorrowerBankId] = React.useState('')
+  const [isBorrowerBankOpen, setIsBorrowerBankOpen] = React.useState(false)
+  const borrowerBankRef = React.useRef<HTMLDivElement>(null)
   const [lenderCompany, setLenderCompany] = React.useState('')
 
   const [isLenderOpen, setIsLenderOpen] = React.useState(false)
@@ -158,6 +161,9 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
       if (lenderRef.current && !lenderRef.current.contains(target)) {
         setIsLenderOpen(false)
       }
+      if (borrowerBankRef.current && !borrowerBankRef.current.contains(target)) {
+        setIsBorrowerBankOpen(false)
+      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
@@ -172,6 +178,8 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
       setParticulars('')
       setAmount('')
       setBorrowerCompany(defaultBorrower)
+      setBorrowerBankId('')
+      setIsBorrowerBankOpen(false)
       // Pick first eligible lender
       const eligible = allCompanyNames.filter(
         (c) => c.toLowerCase() !== defaultBorrower.toLowerCase()
@@ -183,21 +191,41 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
       setError('')
       setFieldErrors({})
 
-      if (!isCompanyUser) {
-        let mounted = true
-        setBankAccounts(bankService.getCachedAccounts() || [])
-        bankService
-          .getAccounts()
-          .then((accounts) => {
-            if (mounted) setBankAccounts(accounts || [])
-          })
-          .catch(() => {})
-        return () => {
-          mounted = false
-        }
+      let mounted = true
+      setBankAccounts(bankService.getCachedAccounts() || [])
+      bankService
+        .getAccounts()
+        .then((accounts) => {
+          if (mounted) setBankAccounts(accounts || [])
+        })
+        .catch(() => {})
+      return () => {
+        mounted = false
       }
     }
-  }, [open, defaultBorrower, allCompanyNames, isCompanyUser])
+  }, [open, defaultBorrower, allCompanyNames])
+
+  const borrowerBankAccounts = React.useMemo(() => {
+    if (!borrowerCompany) return []
+    const owned = bankAccounts.filter((acc) => isAccountOwnedBy(acc, borrowerCompany))
+    return preferSoleOwnedBanks(owned, borrowerCompany)
+  }, [bankAccounts, borrowerCompany])
+
+  React.useEffect(() => {
+    if (borrowerBankAccounts.length === 0) {
+      if (borrowerBankId) setBorrowerBankId('')
+      return
+    }
+    const stillValid = borrowerBankAccounts.some((acc) => acc.id === borrowerBankId)
+    if (!stillValid) {
+      setBorrowerBankId(borrowerBankAccounts[0].id)
+    }
+  }, [borrowerBankAccounts, borrowerBankId])
+
+  const selectedBorrowerBank = React.useMemo(
+    () => borrowerBankAccounts.find((acc) => acc.id === borrowerBankId) || null,
+    [borrowerBankAccounts, borrowerBankId]
+  )
 
   const getCompanyBankSummary = React.useCallback(
     (companyName: string) => {
@@ -271,6 +299,7 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
         amount: parsedAmount,
         borrowerCompany: borrowerCompany.trim(),
         lenderCompany: chosenLender,
+        borrowerBankAccountId: borrowerBankId || undefined,
         status: 'Pending Approval',
       }
       const created = await loanService.addLoan(payload)
@@ -317,6 +346,9 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                 errorMessage={error}
                 items={[
                   { label: 'Borrower', value: borrowerCompany, highlight: true },
+                  ...(selectedBorrowerBank
+                    ? [{ label: 'Receiving Bank', value: `${selectedBorrowerBank.bankName} • ${selectedBorrowerBank.accountName}` }]
+                    : []),
                   { label: 'Principal Amount', value: formatPHP(parseFloat(amount.replace(/,/g, '')) || 0), isCurrency: true },
                   ...(isFinanceUser ? [{ label: 'Interest Rate', value: `${parseFloat(interestRate) || 0}%` }] : []),
                   { label: 'Start Date', value: date },
@@ -388,6 +420,83 @@ export const AddLoanModal: React.FC<AddLoanModalProps> = ({
                   </div>
                 )}
                 <FormFieldError error={fieldErrors.borrower} />
+              </div>
+
+              {/* 3. Receiving Bank Account (Borrower's Destination Bank) */}
+              <div className="space-y-1.5 col-span-1 sm:col-span-2" ref={borrowerBankRef}>
+                <Label className="text-xs font-semibold text-focus block">
+                  Receiving Bank Account
+                </Label>
+                {borrowerBankAccounts.length === 0 ? (
+                  <div className="h-10 px-3 rounded-xl border border-dashed border-stroke/60 bg-slate-50 text-muted-fg text-xs flex items-center gap-2 select-none">
+                    <Landmark className="w-4 h-4 text-slate-400 shrink-0" />
+                    <span>No registered bank accounts for {borrowerCompany || 'this company'}</span>
+                  </div>
+                ) : (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsBorrowerBankOpen((prev) => !prev)}
+                      className="w-full min-h-[40px] px-3 py-1.5 rounded-xl border border-stroke/60 bg-white hover:bg-slate-50 text-focus text-xs sm:text-sm font-medium shadow-2xs flex items-center justify-between gap-2 cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        <Landmark className="w-4 h-4 text-primary shrink-0" />
+                        <span className="truncate">
+                          {selectedBorrowerBank
+                            ? `${selectedBorrowerBank.bankName} • ${selectedBorrowerBank.accountName}`
+                            : 'Select Receiving Bank Account…'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {selectedBorrowerBank && (
+                          <span className="text-[11px] font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200/80">
+                            {formatPHP(selectedBorrowerBank.currentBalance)}
+                          </span>
+                        )}
+                        <ChevronDown className="w-4 h-4 text-muted-fg shrink-0" />
+                      </div>
+                    </button>
+                    {isBorrowerBankOpen && (
+                      <div className="absolute left-0 right-0 top-full mt-1.5 bg-white rounded-2xl border border-stroke/30 shadow-2xl p-2 z-50 max-h-60 overflow-y-auto space-y-1">
+                        {borrowerBankAccounts.map((acc) => {
+                          const isSelected = acc.id === borrowerBankId
+                          return (
+                            <button
+                              key={acc.id}
+                              type="button"
+                              onClick={() => {
+                                setBorrowerBankId(acc.id)
+                                setIsBorrowerBankOpen(false)
+                              }}
+                              className={cn(
+                                'w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs text-left cursor-pointer border border-transparent transition-colors',
+                                isSelected
+                                  ? 'bg-blue-50/90 text-blue-900 border-blue-200/70'
+                                  : 'text-focus hover:bg-slate-50'
+                              )}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 font-semibold truncate">
+                                  <span>{acc.bankName}</span>
+                                  <span className="text-slate-400 font-normal">•</span>
+                                  <span className="truncate">{acc.accountName}</span>
+                                </div>
+                                <div className="text-[11px] text-muted-fg flex items-center gap-2 mt-0.5">
+                                  <span>{acc.accountType}</span>
+                                  <span>•</span>
+                                  <span className="font-medium text-slate-700">
+                                    {formatPHP(acc.currentBalance)}
+                                  </span>
+                                </div>
+                              </div>
+                              {isSelected && <Check className="w-4 h-4 text-blue-600 shrink-0" />}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* 4. Lender Company */}

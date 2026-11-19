@@ -96,6 +96,9 @@ class ReceivablesStore {
   private sales: UtangSale[] = []
   private listeners: Set<() => void> = new Set()
   private wsRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  private loading: boolean = typeof window !== 'undefined'
+  private hasLoaded: boolean = false
+  private inflightRefresh: Promise<void> | null = null
 
   constructor() {
     this.sales = []
@@ -105,7 +108,16 @@ class ReceivablesStore {
       } catch {
         // clean up any legacy storage
       }
-      void this.refreshFromBackend()
+      const hasToken = Boolean(
+        sessionStorage.getItem('mct_access_token') ||
+          sessionStorage.getItem('auth_token') ||
+          localStorage.getItem('auth_token')
+      )
+      if (hasToken) {
+        void this.refreshFromBackend()
+      } else {
+        this.loading = false
+      }
       const scheduleRefresh = () => {
         if (this.wsRefreshTimer) clearTimeout(this.wsRefreshTimer)
         this.wsRefreshTimer = setTimeout(() => {
@@ -118,47 +130,68 @@ class ReceivablesStore {
     }
   }
 
+  public getIsLoading(): boolean {
+    return !this.hasLoaded && this.loading
+  }
+
   public async refreshFromBackend(): Promise<void> {
-    try {
-      const data = await receivablesService.listReceivables()
-      if (Array.isArray(data)) {
-        this.sales = data.map((r: BackendReceivable) => ({
-          id: String(r.receivable_id),
-          company: r.company_name || '',
-          company_id: r.company_id,
-          sale_id: r.sale_id ?? null,
-          sale_line_index: r.sale_line_index ?? null,
-          is_locked: Boolean(r.is_locked),
-          date: r.transaction_date,
-          customer_name: r.customer_name,
-          customer_type: (r.customer_type === 'Internal' ? 'Staff' : 'External') as CustomerType,
-          items_summary: r.items_summary,
-          total_amount: Number(r.total_amount),
-          amount_paid: Number(r.amount_paid),
-          balance: Number(r.balance),
-          payment_status: r.payment_status as PaymentStatus,
-          notes: r.notes || undefined,
-          origin_bank_account_id: r.origin_bank_account_id ?? null,
-          origin_bank_name: r.origin_bank_name ?? null,
-          deposit_status: r.sale_deposit_status ?? null,
-          deposit_date: r.sale_deposit_date ?? null,
-          payments: (r.payments || []).map((p) => ({
-            id: String(p.payment_id),
-            sale_id: String(p.receivable_id),
+    if (this.inflightRefresh) {
+      return this.inflightRefresh
+    }
+
+    this.loading = true
+    if (!this.hasLoaded) {
+      this.notify()
+    }
+
+    this.inflightRefresh = (async () => {
+      try {
+        const data = await receivablesService.listReceivables()
+        if (Array.isArray(data)) {
+          this.sales = data.map((r: BackendReceivable) => ({
+            id: String(r.receivable_id),
+            company: r.company_name || '',
+            company_id: r.company_id,
+            sale_id: r.sale_id ?? null,
+            sale_line_index: r.sale_line_index ?? null,
+            is_locked: Boolean(r.is_locked),
+            date: r.transaction_date,
             customer_name: r.customer_name,
-            amount: Number(p.amount),
-            date: p.payment_date,
-            method: (p.payment_method || 'Cash') as PaymentMethod,
-            bank_account_id: p.bank_account_id ?? null,
-            notes: p.notes || undefined,
-            createdAt: p.created_at || new Date().toISOString(),
-          })),
-        }))
+            customer_type: (r.customer_type === 'Internal' ? 'Staff' : 'External') as CustomerType,
+            items_summary: r.items_summary,
+            total_amount: Number(r.total_amount),
+            amount_paid: Number(r.amount_paid),
+            balance: Number(r.balance),
+            payment_status: r.payment_status as PaymentStatus,
+            notes: r.notes || undefined,
+            origin_bank_account_id: r.origin_bank_account_id ?? null,
+            origin_bank_name: r.origin_bank_name ?? null,
+            deposit_status: r.sale_deposit_status ?? null,
+            deposit_date: r.sale_deposit_date ?? null,
+            payments: (r.payments || []).map((p) => ({
+              id: String(p.payment_id),
+              sale_id: String(p.receivable_id),
+              customer_name: r.customer_name,
+              amount: Number(p.amount),
+              date: p.payment_date,
+              method: (p.payment_method || 'Cash') as PaymentMethod,
+              bank_account_id: p.bank_account_id ?? null,
+              notes: p.notes || undefined,
+              createdAt: p.created_at || new Date().toISOString(),
+            })),
+          }))
+        }
+      } catch {
+        // Keep in-memory data on network error
+      } finally {
+        this.loading = false
+        this.hasLoaded = true
+        this.inflightRefresh = null
         this.notify()
       }
-    } catch {
-      // Keep in-memory data on network error
-    }
+    })()
+
+    return this.inflightRefresh
   }
 
   private save(): void {

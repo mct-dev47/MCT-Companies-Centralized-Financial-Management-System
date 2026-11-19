@@ -70,46 +70,55 @@ def test_delete_expense_unbound_local_prevention():
         assert excinfo.value.detail == "Expense not found"
 
 def test_get_expenses_allows_audit_and_finance_roles():
-    """Verify that centralized roles (audit, finance) are treated as privileged and not filtered to empty list."""
-    mock_db = MagicMock()
-    mock_client = MagicMock()
-    mock_query = MagicMock()
-    mock_client.table.return_value.select.return_value = mock_query
-    mock_query.order.return_value = mock_query
-    mock_query.range.return_value = mock_query
-    mock_query.execute.return_value.data = [
-        {
-            "expense_id": 1,
-            "company_id": 28,
-            "category_id": 20,
-            "payment_method": "Cash",
-            "amount": 250.0,
-            "expense_date": "2026-10-28",
-            "description": "Audited transaction"
-        }
-    ]
+    """Verify that audit (unrestricted) and finance (assigned company) roles can read expenses from SQL."""
+    from datetime import date
+    from decimal import Decimal
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from app.db.session import Base
+    from app.models.company import Company
+    from app.models.finance import Category, Expense
 
-    for role in ["audit", "finance"]:
-        user = {
-            "auth_user_id": f"{role}-1",
-            "user_id": 2,
-            "email": f"{role}@mct.com",
-            "company_id": None,
-            "company_ids": [],
-            "is_admin": role == "admin",
-            "role": role
-        }
-        with patch("app.api.v1.endpoints.expenses.get_supabase_admin_client", return_value=mock_client):
-            with patch("app.api.v1.endpoints.expenses.get_supabase_mappings", return_value=({28: "Kitchen Corp"}, {20: "Supplies"})):
-                results = get_expenses(
-                    company_id=None,
-                    company_name=None,
-                    category_id=None,
-                    start_date=None,
-                    end_date=None,
-                    current_user=user,
-                    db=mock_db
-                )
-                assert len(results) == 1
-                assert results[0].expense_id == 1
-                assert results[0].company_id == 28
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(bind=engine)
+    db = sessionmaker(bind=engine, autoflush=False, autocommit=False)()
+    try:
+        db.add(Company(company_id=28, company_name="Kitchen Corp"))
+        db.add(Category(category_id=20, name="Supplies"))
+        db.add(Expense(
+            expense_id=1,
+            company_id=28,
+            category_id=20,
+            payment_method="Cash",
+            amount=Decimal("250.00"),
+            amount_paid=Decimal("250.00"),
+            expense_date=date(2026, 10, 28),
+            description="Audited transaction",
+        ))
+        db.commit()
+
+        for role, company_ids in [("audit", []), ("finance", [28])]:
+            user = {
+                "auth_user_id": f"{role}-1",
+                "user_id": 2,
+                "email": f"{role}@mct.com",
+                "company_id": None,
+                "company_ids": company_ids,
+                "is_admin": False,
+                "role": role,
+            }
+            results = get_expenses(
+                company_id=None,
+                company_name=None,
+                category_id=None,
+                start_date=None,
+                end_date=None,
+                current_user=user,
+                db=db,
+            )
+            assert len(results) == 1
+            assert results[0].expense_id == 1
+            assert results[0].company_id == 28
+    finally:
+        db.close()

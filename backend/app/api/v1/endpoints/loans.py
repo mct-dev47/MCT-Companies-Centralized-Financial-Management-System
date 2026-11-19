@@ -648,6 +648,7 @@ def get_loans(
             disbursed_by=getattr(l, "disbursed_by", None),
             disbursed_at=getattr(l, "disbursed_at", None),
             bank_account_id=getattr(l, "bank_account_id", None),
+            borrower_bank_account_id=getattr(l, "borrower_bank_account_id", None),
             created_at=l.created_at,
             updated_at=l.updated_at,
         )
@@ -781,6 +782,7 @@ def _export_loans_unbounded(
             disbursed_by=getattr(l, "disbursed_by", None),
             disbursed_at=getattr(l, "disbursed_at", None),
             bank_account_id=getattr(l, "bank_account_id", None),
+            borrower_bank_account_id=getattr(l, "borrower_bank_account_id", None),
             created_at=l.created_at,
             updated_at=l.updated_at,
         )
@@ -822,6 +824,25 @@ def create_loan(
     if loan_in.principal_amount < Decimal("1.00"):
         raise HTTPException(status_code=400, detail="Loan amount must be at least 1.00 (cannot be 0 or letters).")
 
+    b_name = id_to_name.get(borrower_id) or loan_in.borrower_company or f"Company #{borrower_id}"
+    borrower_bank_id = (loan_in.borrower_bank_account_id or "").strip() or None
+    if borrower_bank_id:
+        borrower_acc = db.query(BankAccount).filter(BankAccount.id == borrower_bank_id).first()
+        if not borrower_acc:
+            raise HTTPException(status_code=400, detail="Selected receiving bank account was not found.")
+        owns_via_id = borrower_acc.company_id is not None and int(borrower_acc.company_id) == int(borrower_id)
+        owns_via_name = any(
+            o.strip().lower() == b_name.strip().lower()
+            or o.strip().lower() in b_name.strip().lower()
+            or b_name.strip().lower() in o.strip().lower()
+            for o in (borrower_acc.company_names or [])
+        )
+        if not owns_via_id and not owns_via_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Selected receiving bank account does not belong to the borrower company.",
+            )
+
     desc = (loan_in.particulars or loan_in.description or "").strip()
     if not desc:
         desc = "Inter-company term financing facility"
@@ -835,6 +856,7 @@ def create_loan(
         "borrower": borrower_id,
         "lender": lender_id,
         "loan_ref_no": ref_no,
+        "borrower_bank_account_id": borrower_bank_id,
         "principal_amount": float(loan_in.principal_amount),
         "interest_rate": float(loan_in.interest_rate or 0.0),
         "loan_date": loan_in.loan_date.isoformat(),
@@ -861,6 +883,7 @@ def create_loan(
             borrower=borrower_id,
             lender=lender_id,
             loan_ref_no=ref_no,
+            borrower_bank_account_id=borrower_bank_id,
             principal_amount=loan_in.principal_amount,
             interest_rate=loan_in.interest_rate or Decimal("0.00"),
             loan_date=loan_in.loan_date,
@@ -876,7 +899,6 @@ def create_loan(
         except Exception as e:
             db.rollback()
             print(f"Database mirror insert loan error: {e}")
-    b_name = id_to_name.get(borrower_id) or loan_in.borrower_company or f"Company #{borrower_id}"
     l_name = id_to_name.get(lender_id) if lender_id else (loan_in.lender_company or "Pending Finance Assignment")
 
     try:
@@ -908,6 +930,7 @@ def create_loan(
         due_date=loan_in.due_date,
         description=desc,
         particulars=desc,
+        borrower_bank_account_id=borrower_bank_id,
         status="Pending Finance Endorsement",
         created_at=datetime.now(),
         updated_at=datetime.now(),
@@ -1216,6 +1239,7 @@ def endorse_loan(
         audit_reviewed_at=final_source.get("audit_reviewed_at"),
         audit_remark=final_source.get("audit_remark"),
         bank_account_id=update_payload.get("bank_account_id") or final_source.get("bank_account_id") or (sql_loan.bank_account_id if sql_loan else None),
+        borrower_bank_account_id=final_source.get("borrower_bank_account_id") or (sql_loan.borrower_bank_account_id if sql_loan else None),
         created_at=final_source.get("created_at") or datetime.now(),
         updated_at=now_ts,
     )
@@ -1275,9 +1299,22 @@ def _move_loan_funds(db: Session, *, loan_id: int, sql_loan, final_source: dict,
         print(f"Loan disbursement bank deduction error: {exc}")
         raise HTTPException(status_code=400, detail="Bank deduction failed. Please try again.")
 
-    borrower_acc = db.query(BankAccount).filter(BankAccount.company_id == borrower_id).first()
+    borrower_bank_id = (
+        (sql_loan.borrower_bank_account_id if sql_loan else None)
+        or final_source.get("borrower_bank_account_id")
+    )
+    borrower_acc = None
+    if borrower_bank_id:
+        borrower_acc = db.query(BankAccount).filter(BankAccount.id == borrower_bank_id).first()
     if not borrower_acc:
         borrower_acc = bank_svc.find_account_for_company(b_name_disp)
+    if not borrower_acc and borrower_id:
+        borrower_acc = (
+            db.query(BankAccount)
+            .filter(BankAccount.company_id == borrower_id)
+            .order_by(BankAccount.id.asc())
+            .first()
+        )
     if borrower_acc:
         try:
             bank_svc.deposit(borrower_acc.id, BankDepositWithdrawRequest(
@@ -1419,6 +1456,7 @@ def audit_review_loan(
         audit_reviewed_at=now_ts,
         audit_remark=remark_text,
         bank_account_id=final_source.get("bank_account_id") or (sql_loan.bank_account_id if sql_loan else None),
+        borrower_bank_account_id=final_source.get("borrower_bank_account_id") or (sql_loan.borrower_bank_account_id if sql_loan else None),
         created_at=final_source.get("created_at") or datetime.now(),
         updated_at=now_ts,
     )
@@ -1545,6 +1583,7 @@ def disburse_loan(
         disbursed_by=disburser,
         disbursed_at=now_ts,
         bank_account_id=pick("bank_account_id"),
+        borrower_bank_account_id=pick("borrower_bank_account_id"),
         created_at=pick("created_at") or now_ts,
         updated_at=now_ts,
     )

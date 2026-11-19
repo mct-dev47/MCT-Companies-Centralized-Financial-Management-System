@@ -75,6 +75,7 @@ class ReceivablesService:
         search: Optional[str] = None,
         limit: Optional[int] = 100,
         offset: int = 0,
+        include_total: bool = True,
     ) -> Tuple[List[Receivable], int]:
         query = self.db.query(Receivable)
         query = self._apply_company_filters(query, company_id=company_id, company_ids=company_ids, company_name=company_name)
@@ -104,13 +105,15 @@ class ReceivablesService:
                 )
             )
 
-        total = query.count()
+        total = query.count() if include_total else 0
         ordered = query.options(selectinload(Receivable.payments)).order_by(
             desc(Receivable.transaction_date), desc(Receivable.receivable_id)
         )
         if limit is not None:
             ordered = ordered.offset(offset).limit(limit)
         rows = ordered.all()
+        if not include_total:
+            total = len(rows)
         return self.sync_service.attach_lock_flags(rows), total
 
     def list_receivables(
@@ -137,6 +140,7 @@ class ReceivablesService:
             search=search,
             limit=limit,
             offset=offset,
+            include_total=False,
         )
         return rows
 
@@ -271,7 +275,7 @@ class ReceivablesService:
                     bank_svc.record_deposit_by_account_id(
                         account_id=deposit_bank_id,
                         amount=amount_paid,
-                        particulars=f"Food Receivable Payment - {rec.customer_name}",
+                        particulars=f"Receivable Payment - {rec.customer_name}",
                         tx_date=rec.transaction_date.strftime("%m/%d/%y"),
                         source_sale_id=rec.sale_id,
                     )
@@ -338,6 +342,7 @@ class ReceivablesService:
             received_by=actor_name or payment_data.received_by,
         )
         self.db.add(payment)
+        self.db.flush()
 
         rec.amount_paid = min(
             Decimal(str(rec.total_amount or 0)),
@@ -356,10 +361,11 @@ class ReceivablesService:
                 bank_svc.record_deposit_by_account_id(
                     account_id=deposit_bank_id,
                     amount=pay_amount,
-                    particulars=f"Food Receivable Payment - {rec.customer_name}",
+                    particulars=f"Receivable Payment - {rec.customer_name}",
                     reference_no=payment_data.reference_no,
                     tx_date=pay_date.strftime("%m/%d/%y"),
                     source_sale_id=rec.sale_id,
+                    source_receivable_payment_id=payment.payment_id,
                 )
                 ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": deposit_bank_id}})
             except Exception:
@@ -505,7 +511,7 @@ class ReceivablesService:
                                 BankService(self.db).record_withdrawal_by_account_id(
                                     account_id=pay.bank_account_id,
                                     amount=reduce_by,
-                                    particulars=f"Adjustment Reversal of Food Receivable Payment - {rec.customer_name}",
+                                    particulars=f"Adjustment Reversal of Receivable Payment - {rec.customer_name}",
                                     tx_date=date.today().strftime("%m/%d/%y"),
                                     source_sale_id=rec.sale_id,
                                 )
@@ -558,7 +564,7 @@ class ReceivablesService:
                         BankService(self.db).record_deposit_by_account_id(
                             account_id=settle_bank_id,
                             amount=remaining,
-                            particulars=f"Food Receivable Payment - {rec.customer_name}",
+                            particulars=f"Receivable Payment - {rec.customer_name}",
                             tx_date=pay_date.strftime("%m/%d/%y"),
                             source_sale_id=rec.sale_id,
                         )
@@ -657,7 +663,24 @@ class ReceivablesService:
         self.sync_service.assert_sale_not_locked(rec.sale_id)
 
         pay_amount = Decimal(str(pay.amount or 0))
-        self.sync_service.reverse_payment_bank_deposit(pay, rec.customer_name)
+        from app.models.bank import BankTransaction
+        linked_bt = (
+            self.db.query(BankTransaction)
+            .filter(BankTransaction.source_receivable_payment_id == pay.payment_id)
+            .all()
+        )
+        if linked_bt:
+            bank_svc = BankService(self.db)
+            touched_accounts = {bt.bank_account_id for bt in linked_bt}
+            for bt in linked_bt:
+                self.db.delete(bt)
+            self.db.flush()
+            for acc_id in touched_accounts:
+                acc = bank_svc._get_account_for_update(acc_id)
+                if acc is not None:
+                    bank_svc._sync_balance(acc)
+        else:
+            self.sync_service.reverse_payment_bank_deposit(pay, rec.customer_name)
 
         rec.amount_paid = max(Decimal("0.00"), Decimal(str(rec.amount_paid or 0)) - pay_amount)
         rec.balance = max(Decimal("0.00"), Decimal(str(rec.total_amount or 0)) - rec.amount_paid)

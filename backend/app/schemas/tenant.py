@@ -71,6 +71,7 @@ class PaymentOut(BaseModel):
     missed_reason: Optional[str] = None
     period_index: Optional[int] = None
     sale_id: Optional[int] = None
+    is_locked: bool = False
     created_by: Optional[int] = None
     created_by_name: Optional[str] = None
     created_at: Optional[str] = None
@@ -103,4 +104,5 @@ class LeaseOut(BaseModel):
     created_by_name: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    is_locked: bool = False
     payments: List[PaymentOut] = []

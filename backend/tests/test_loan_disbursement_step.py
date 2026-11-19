@@ -149,3 +149,86 @@ def test_repayment_blocked_until_disbursed(env):
     holder["user"] = FINANCE
     res = client.post("/loans/1/repayments", json={"loan_id": 1, "payment_date": str(date.today()), "amount": 100})
     assert res.status_code == 409
+
+
+def test_request_loan_with_chosen_borrower_bank_credits_selected_bank(env):
+    client, holder, Session = env
+    with Session() as db:
+        db.add(
+            BankAccount(
+                id="bnk-borrower-2",
+                bank_name="UnionBank",
+                account_name="Borrower Second",
+                company_name="Borrower Co",
+                company_id=2,
+                starting_balance=Decimal("0"),
+                current_balance=Decimal("0"),
+            )
+        )
+        db.commit()
+
+    def _create_endorse_approve_disburse(chosen_bank_id: str, amount: int, ref_no: str) -> dict:
+        holder["user"] = SUPERVISOR
+        create_res = client.post(
+            "/loans",
+            json={
+                "borrower_company": "Borrower Co",
+                "borrower_bank_account_id": chosen_bank_id,
+                "loan_ref_no": ref_no,
+                "principal_amount": amount,
+                "loan_date": str(date.today()),
+                "description": f"Loan to {chosen_bank_id}",
+            },
+        )
+        assert create_res.status_code == 201, create_res.text
+        created = create_res.json()
+        assert created["borrower_bank_account_id"] == chosen_bank_id
+        lid = created["loan_id"]
+
+        holder["user"] = FINANCE
+        endorse_res = client.post(
+            f"/loans/{lid}/endorse",
+            json={"action": "endorse", "bank_account_id": "bnk-lender", "remark": "ok"},
+        )
+        assert endorse_res.status_code == 200, endorse_res.text
+        assert endorse_res.json()["borrower_bank_account_id"] == chosen_bank_id
+
+        holder["user"] = AUDIT
+        audit_res = client.post(
+            f"/loans/{lid}/audit-review",
+            json={"action": "approve", "remark": "ok"},
+        )
+        assert audit_res.status_code == 200, audit_res.text
+
+        holder["user"] = FINANCE
+        disb_res = client.post(f"/loans/{lid}/disburse")
+        assert disb_res.status_code == 200, disb_res.text
+        return disb_res.json()
+
+    first_disb = _create_endorse_approve_disburse("bnk-borrower-2", 1200, "LN-TEST-B2")
+    assert first_disb["borrower_bank_account_id"] == "bnk-borrower-2"
+    with Session() as db:
+        assert Decimal(str(db.get(BankAccount, "bnk-borrower").current_balance)) == Decimal("0.00")
+        assert Decimal(str(db.get(BankAccount, "bnk-borrower-2").current_balance)) == Decimal("1200.00")
+
+    second_disb = _create_endorse_approve_disburse("bnk-borrower", 800, "LN-TEST-B1")
+    assert second_disb["borrower_bank_account_id"] == "bnk-borrower"
+    with Session() as db:
+        assert Decimal(str(db.get(BankAccount, "bnk-borrower").current_balance)) == Decimal("800.00")
+        assert Decimal(str(db.get(BankAccount, "bnk-borrower-2").current_balance)) == Decimal("1200.00")
+
+
+def test_request_loan_rejects_borrower_bank_owned_by_other_company(env):
+    client, holder, _ = env
+    holder["user"] = SUPERVISOR
+    res = client.post(
+        "/loans",
+        json={
+            "borrower_company": "Borrower Co",
+            "borrower_bank_account_id": "bnk-lender",
+            "principal_amount": 500,
+            "loan_date": str(date.today()),
+            "description": "Invalid bank",
+        },
+    )
+    assert res.status_code == 400

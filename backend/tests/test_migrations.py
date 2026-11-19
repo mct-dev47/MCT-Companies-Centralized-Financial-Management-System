@@ -332,6 +332,54 @@ class TestMigrations(unittest.TestCase):
             self.assertIn("ix_loans_repayments_expense_id", lr_idx)
             self.assertIn("ix_bank_transactions_source_loan_repayment_id", bt_idx)
 
+    def test_0075_and_0076_migrations(self):
+        """Verify migrations 0075 (loan.borrower_bank_account_id) and 0076 (bank_transactions.source_receivable_payment_id) in SQLite and Postgres."""
+        from unittest.mock import MagicMock
+        from app.db.migrations import _run_postgresql_migrations
+
+        with self.engine.begin() as conn:
+            conn.execute(text("CREATE TABLE IF NOT EXISTS loan (loan_id INTEGER PRIMARY KEY AUTOINCREMENT, borrower INTEGER NOT NULL, loan_date DATE NOT NULL);"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS bank_transactions (id VARCHAR(100) PRIMARY KEY, bank_account_id VARCHAR(100) NOT NULL);"))
+
+        applied = run_migrations(self.engine)
+        self.assertIn("0075_loan_borrower_bank", applied)
+        self.assertIn("0076_bank_transactions_receivable_payment_link", applied)
+
+        applied_second = run_migrations(self.engine)
+        self.assertNotIn("0075_loan_borrower_bank", applied_second)
+        self.assertNotIn("0076_bank_transactions_receivable_payment_link", applied_second)
+
+        inspector = inspect(self.engine)
+        loan_cols = {col["name"] for col in inspector.get_columns("loan")}
+        bt_cols = {col["name"] for col in inspector.get_columns("bank_transactions")}
+        self.assertIn("borrower_bank_account_id", loan_cols)
+        self.assertIn("source_receivable_payment_id", bt_cols)
+
+        with self.engine.connect() as conn:
+            bt_idx = {row[1] for row in conn.execute(text("PRAGMA index_list(bank_transactions)")).fetchall()}
+            self.assertIn("ix_bank_transactions_source_receivable_payment_id", bt_idx)
+
+        executed_sql: list[str] = []
+        pg_conn = MagicMock()
+
+        def fake_execute(stmt, *args, **kwargs):
+            s = str(stmt)
+            executed_sql.append(s)
+            res = MagicMock()
+            if "SELECT 1 FROM schema_migrations" in s:
+                if "0075_loan_borrower_bank" in s or "0076_bank_transactions_receivable_payment_link" in s:
+                    res.first.return_value = None
+                else:
+                    res.first.return_value = (1,)
+            return res
+
+        pg_conn.execute.side_effect = fake_execute
+        pg_applied = _run_postgresql_migrations(pg_conn)
+        self.assertIn("0075_loan_borrower_bank", pg_applied)
+        self.assertIn("0076_bank_transactions_receivable_payment_link", pg_applied)
+        self.assertTrue(any("borrower_bank_account_id" in s for s in executed_sql))
+        self.assertTrue(any("ix_bank_transactions_source_receivable_payment_id" in s for s in executed_sql))
+
 
 if __name__ == "__main__":
     unittest.main()

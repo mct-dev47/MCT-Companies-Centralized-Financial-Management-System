@@ -579,14 +579,37 @@ class ActivityLogService:
                 return None
             if isinstance(dt_val, str):
                 s = dt_val.strip()
-                if re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", s) and not re.search(r"([zZ]|[+-]\d{2}:?\d{2})$", s):
-                    return f"{s.replace(' ', 'T')}Z"
+                if re.match(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", s):
+                    s = re.sub(r"^(\d{4}-\d{2}-\d{2}) ", r"\1T", s)
+                    if not re.search(r"([zZ]|[+-]\d{2}:?\d{2})$", s):
+                        return f"{s}Z"
                 return s
             if hasattr(dt_val, "tzinfo") and dt_val.tzinfo is not None:
                 return dt_val.isoformat()
             elif hasattr(dt_val, "isoformat"):
                 return f"{dt_val.isoformat()}Z"
             return str(dt_val)
+
+        def _parse_sort_key(ts: Optional[str]) -> datetime:
+            if not ts:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            s = str(ts).strip()
+            if not s:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            if s.endswith(("Z", "z")):
+                s = s[:-1] + "+00:00"
+            try:
+                parsed = datetime.fromisoformat(s)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                return parsed.astimezone(timezone.utc)
+            except ValueError:
+                pass
+            try:
+                d = date.fromisoformat(s[:10])
+                return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+            except ValueError:
+                return datetime.min.replace(tzinfo=timezone.utc)
 
         raw_id_str = str(record_id or "").strip()
         parsed_id: Optional[int] = None
@@ -879,7 +902,7 @@ class ActivityLogService:
                                 title="Replenishment / Reimbursement Claim Filed" if is_reimb else "Petty Cash Top Up Requested",
                                 actor_name=claimant_name,
                                 actor_role="Employee / Staff",
-                                timestamp=str(topup.created_at) if topup.created_at else str(topup.topup_date),
+                                timestamp=_format_iso(topup.created_at) or str(topup.topup_date),
                                 description=f"Submitted {topup.request_type or 'topup'} request for ₱{topup.amount:,.2f}: {topup.description or 'Petty cash replenishment'}",
                                 status_badge=topup.status,
                             )
@@ -897,7 +920,7 @@ class ActivityLogService:
                                     title="Endorsed by Finance",
                                     actor_name=resolve_real_name(topup.endorsed_by or "Finance Officer"),
                                     actor_role="Finance Officer",
-                                    timestamp=str(topup.endorsed_at) if topup.endorsed_at else str(topup.created_at),
+                                    timestamp=_format_iso(topup.endorsed_at) or _format_iso(topup.created_at),
                                     description="Funding bank assigned and request endorsed to Internal Audit",
                                     notes=topup.finance_remark,
                                     status_badge="Pending Audit Approval",
@@ -917,7 +940,7 @@ class ActivityLogService:
                                     title="Audited & Approved" if is_approved else "Disapproved by Audit",
                                     actor_name=resolve_real_name(topup.reviewed_by or "Internal Auditor"),
                                     actor_role="Audit Officer",
-                                    timestamp=str(topup.reviewed_at) if topup.reviewed_at else str(topup.endorsed_at or topup.created_at),
+                                    timestamp=_format_iso(topup.reviewed_at) or _format_iso(topup.endorsed_at) or _format_iso(topup.created_at),
                                     description=f"Internal audit review complete. Status: {topup.status}",
                                     notes=topup.remark,
                                     status_badge=topup.status,
@@ -934,7 +957,7 @@ class ActivityLogService:
                                 title="Bank Transfer Confirmed Received",
                                 actor_name=resolve_real_name(topup.transfer_received_by or "Finance Officer"),
                                 actor_role="Finance Officer",
-                                timestamp=str(topup.transfer_received_at),
+                                timestamp=_format_iso(topup.transfer_received_at),
                                 description="Funding transfer verified and received by requesting company bank",
                                 status_badge="Transfer Received",
                             )
@@ -953,7 +976,7 @@ class ActivityLogService:
                                     title="Float Finalized & Settled" if is_settled else "Reimbursement Payout Disbursed",
                                     actor_name=resolve_real_name(topup.reimbursed_by or "Finance Officer"),
                                     actor_role="Finance Officer",
-                                    timestamp=str(topup.reimbursed_at) if topup.reimbursed_at else str(topup.reviewed_at or topup.created_at),
+                                    timestamp=_format_iso(topup.reimbursed_at) or _format_iso(topup.reviewed_at) or _format_iso(topup.created_at),
                                     description="Disbursement finalized and petty cash ledger updated" if is_settled else f"Employee reimbursement of ₱{topup.amount_reimbursed or topup.amount:,.2f} disbursed",
                                     status_badge=topup.status,
                                 )
@@ -970,7 +993,7 @@ class ActivityLogService:
                             title="Loan Facility Originated",
                             actor_name="Authorized Finance Officer",
                             actor_role="Finance Officer",
-                            timestamp=str(loan.created_at) if hasattr(loan, "created_at") and loan.created_at else str(loan.date),
+                            timestamp=_format_iso(getattr(loan, "created_at", None)) or str(loan.date),
                             description=f"Loan originated: ₱{loan.amount:,.2f} to {loan.borrower_name or 'Borrower'}",
                             status_badge=loan.status,
                         )
@@ -1028,8 +1051,8 @@ class ActivityLogService:
                                 )
                             )
 
-            # Sort chronological
-            timeline.sort(key=lambda x: str(x.timestamp or ""))
+            # Sort chronological (oldest first, newest last)
+            timeline.sort(key=lambda x: _parse_sort_key(x.timestamp))
             return timeline
         finally:
             if close_session:
