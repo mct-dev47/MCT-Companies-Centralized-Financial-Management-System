@@ -396,3 +396,147 @@ def test_lending_and_tenants_and_petty_cash_audit_syncs(db_session):
     txs = client.get(f"/api/v1/transactions?company_id={comp.company_id}").json()
     pc_tx = next(t for t in txs if t["id"] == f"petty_{topup.topup_id}")
     assert pc_tx["auditStatus"] == "Verified"
+
+
+def test_loan_repayment_audit_syncs_with_expense_bank_and_transactions(db_session):
+    borrower, b_bank = _seed_company_and_bank(db_session, "Repay Bor Corp", "acc-rep-b")
+    lender, l_bank = _seed_company_and_bank(db_session, "Repay Len Corp", "acc-rep-l")
+
+    loan = Loan(
+        borrower=borrower.company_id,
+        lender=lender.company_id,
+        loan_ref_no="LN-REP-001",
+        bank_account_id=l_bank.id,
+        borrower_bank_account_id=b_bank.id,
+        principal_amount=Decimal("10000.00"),
+        loan_date=date.today(),
+        status="Disbursed",
+        description="Repayment sync loan",
+    )
+    db_session.add(loan)
+    db_session.flush()
+
+    exp = Expense(
+        company_id=borrower.company_id,
+        expense_date=date.today(),
+        amount=Decimal("2500.00"),
+        amount_paid=Decimal("2500.00"),
+        particulars="Loan Repayment",
+        payment_method="Bank Transfer",
+        bank_account_id=b_bank.id,
+    )
+    db_session.add(exp)
+    db_session.flush()
+
+    rep = LoanRepayment(
+        loan_id=loan.loan_id,
+        payment_date=date.today(),
+        remaining_balance=Decimal("7500.00"),
+        amount=Decimal("2500.00"),
+        expense_id=exp.expense_id,
+        bank_account_id=b_bank.id,
+    )
+    db_session.add(rep)
+    db_session.flush()
+
+    btx_lender = BankTransaction(
+        id="tx-loan-rep-l",
+        bank_account_id=l_bank.id,
+        transaction_date=date.today().strftime("%m/%d/%y"),
+        particulars="Loan Repayment Received",
+        withdrawal=Decimal("0.00"),
+        deposit=Decimal("2500.00"),
+        net_amount=Decimal("2500.00"),
+        source_loan_repayment_id=rep.loan_repayment_id,
+        company_name=lender.company_name,
+    )
+    db_session.add(btx_lender)
+    db_session.commit()
+
+    # Audit repayment -> syncs to Expense, BankTransaction, and Transactions
+    res = client.patch(f"/api/v1/loans/repayments/{rep.loan_repayment_id}/audit", json={"audit_status": "Verified"})
+    assert res.status_code == 200
+    db_session.refresh(exp)
+    db_session.refresh(btx_lender)
+    assert exp.audit_status == "Verified"
+    assert btx_lender.audit_status == "Verified"
+
+    txs = client.get(f"/api/v1/transactions?company_id={lender.company_id}").json()
+    rep_tx = next(t for t in txs if t["id"] == f"loan_rep_{rep.loan_repayment_id}:lender")
+    assert rep_tx["auditStatus"] == "Verified"
+
+
+def test_lending_and_tenants_audit_from_domain_syncs_to_bank(db_session):
+    comp, bank = _seed_company_and_bank(db_session, "Domain Sync Corp", "acc-dom-1")
+
+    rel_exp = Expense(
+        company_id=comp.company_id,
+        expense_date=date.today(),
+        amount=Decimal("4000.00"),
+        amount_paid=Decimal("4000.00"),
+        particulars="Lending Release",
+        payment_method="Bank Transfer",
+        bank_account_id=bank.id,
+    )
+    db_session.add(rel_exp)
+    db_session.flush()
+    btx_lend = BankTransaction(
+        id="tx-dom-lend",
+        bank_account_id=bank.id,
+        transaction_date=date.today().strftime("%m/%d/%y"),
+        particulars="Lending Release",
+        withdrawal=Decimal("4000.00"),
+        deposit=Decimal("0.00"),
+        net_amount=Decimal("4000.00"),
+        source_expense_id=rel_exp.expense_id,
+        company_name=comp.company_name,
+    )
+    db_session.add(btx_lend)
+    bor = Borrower(
+        borrower_name="Ana",
+        principal_amount=Decimal("4000.00"),
+        total_payable=Decimal("4800.00"),
+        remaining_balance=Decimal("4800.00"),
+        date_borrowed=date.today(),
+        due_date=date.today(),
+        bank_account_id=bank.id,
+        release_expense_id=rel_exp.expense_id,
+    )
+    db_session.add(bor)
+    db_session.commit()
+
+    # Audit borrower -> syncs to release_expense_id and BankTransaction
+    res = client.patch(f"/api/v1/lending/borrowers/{bor.borrower_id}/audit", json={"audit_status": "Verified"})
+    assert res.status_code == 200
+    db_session.refresh(rel_exp)
+    db_session.refresh(btx_lend)
+    assert rel_exp.audit_status == "Verified"
+    assert btx_lend.audit_status == "Verified"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "/api/v1/bills/999999/audit",
+        "/api/v1/receivables/999999/audit",
+        "/api/v1/receivables/payments/999999/audit",
+        "/api/v1/loans/999999/audit",
+        "/api/v1/loans/repayments/999999/audit",
+        "/api/v1/petty-cash/topups/999999/audit",
+    ],
+)
+def test_audit_endpoints_return_404_for_missing_records(endpoint):
+    res = client.patch(endpoint, json={"audit_status": "Verified"})
+    assert res.status_code == 404
+
+
+def test_audit_endpoints_reject_invalid_status_and_non_auditor():
+    # Invalid audit_status -> 422
+    res = client.patch("/api/v1/bills/1/audit", json={"audit_status": "InvalidStatus"})
+    assert res.status_code == 422
+
+    # Non-auditor user -> 403 when require_auditor_user is not overridden
+    app.dependency_overrides.pop(require_auditor_user, None)
+    res_unauth = client.patch("/api/v1/bills/1/audit", json={"audit_status": "Verified"})
+    assert res_unauth.status_code in (401, 403)
+
