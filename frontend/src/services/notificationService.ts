@@ -365,7 +365,7 @@ export const notificationService = {
     }
   },
 
-  async markAllRead(companyId?: number, userId?: string | number | null): Promise<boolean> {
+  async markAllRead(companyId?: number, _userId?: string | number | null): Promise<boolean> {
     clearNotificationCache()
 
     try {

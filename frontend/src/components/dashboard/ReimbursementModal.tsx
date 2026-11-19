@@ -7,7 +7,6 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Dropdown } from '@/components/ui/Dropdown'
-import { ModalReviewStep } from '@/components/common/ModalReviewStep'
 import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -89,16 +88,15 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
   unreservedBalance,
   unreservedBalances,
   companies = [],
-  bankAccounts: initialBankAccounts,
-  banksLoading = false,
-  banksError = null,
-  onRetryBanks,
+  bankAccounts: _initialBankAccounts,
+  banksLoading: _banksLoading = false,
+  banksError: _banksError = null,
+  onRetryBanks: _onRetryBanks,
   onSuccess,
 }) => {
   const { user } = useSession()
   const userRole = (user?.role || '').toLowerCase()
   const canEditPaidBy = ['admin', 'superadmin', 'finance', 'supervisor', 'owner'].includes(userRole)
-  const isFinance = userRole === 'finance' || userRole === 'admin' || userRole === 'superadmin'
 
   // Form Fields
   const [expenseDate, setExpenseDate] = React.useState(todayIso)
@@ -263,7 +261,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
           : user?.assignedCompany || 'MCT Kitchen'
       setRequestingCompany(initialComp)
       setExpenseDate(todayIso())
-      setPaidBy(formatRealName(user?.fullName || user?.name || user?.email || ''))
+      setPaidBy(formatRealName(user?.fullName || user?.fullName || user?.email || user?.email || ''))
       setRemarks('')
       setLines([{ id: '1', particulars: '', amount: '' }])
       setAttachments([])
@@ -495,7 +493,7 @@ export const ReimbursementModal: React.FC<ReimbursementModalProps> = ({
     uploadSingleFile(item)
   }
 
-  const handleViewReceipt = (url?: string, name?: string) => {
+  const handleViewReceipt = (url?: string, _name?: string) => {
     if (!url) return
     if (url.startsWith('data:')) {
       try {

@@ -14,7 +14,6 @@ import {
   UserCheck,
   Building2,
   MapPin,
-  RefreshCw,
 } from 'lucide-react'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'

@@ -18,11 +18,8 @@ import {
   Clock,
   AlertTriangle,
   ArrowRight,
-  Loader2,
-  Check,
   FileText,
   AlertCircle,
-  Building2,
 } from 'lucide-react'
 import { formatPHP } from '@/lib/format'
 import { loanService, type LoanItem } from '@/services/loanService'

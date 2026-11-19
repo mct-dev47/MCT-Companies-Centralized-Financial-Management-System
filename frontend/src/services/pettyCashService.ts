@@ -43,6 +43,7 @@ export interface PettyCashLedgerEntry {
   type: 'topup' | 'expense' | 'request'
   requestType?: 'topup' | 'reimbursement' | 'disbursement' | 'replenishment_disbursement' | string
   paidBy?: string | null
+  requestedBy?: string | null
   receiptUrl?: string | null
   attachments?: string | null
   hasReceipt?: boolean
@@ -188,6 +189,7 @@ export interface PettyCashMovement {
   createdAt: string | null
   requestType?: string | null
   paidBy?: string | null
+  requestedBy?: string | null
   category?: string | null
   totalExpenses?: number | null
   companyFundedAmount?: number | null
@@ -425,10 +427,10 @@ function mapLedgerEntry(data: BackendLedgerEntry): PettyCashLedgerEntry {
   }
 }
 
-function buildQuery(params: Record<string, string | null | undefined>): string {
+function buildQuery(params: Record<string, string | number | null | undefined>): string {
   const query = new URLSearchParams()
   Object.entries(params).forEach(([key, value]) => {
-    if (value) query.set(key, value)
+    if (value !== undefined && value !== null && value !== "") query.set(key, String(value))
   })
   const str = query.toString()
   return str ? `?${str}` : ''
@@ -447,6 +449,7 @@ export interface EligibleExpense {
   particulars: string
   category: string | null
   amount: number
+  referenceNo?: string
 }
 
 const pcCache = new Map<string, { data: any; timestamp: number }>()

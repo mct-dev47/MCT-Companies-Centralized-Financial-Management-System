@@ -1,7 +1,6 @@
 import * as React from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Bell,
   Check,
   Clock,
   AlertCircle,
@@ -67,7 +66,7 @@ export const NotificationsPage: React.FC = () => {
   const [readIds, setReadIds] = React.useState<Set<string>>(() => getReadNotificationIds(userId))
   const [isLoading, setIsLoading] = React.useState(false)
   const [syncError, setSyncError] = React.useState<string | null>(null)
-  const [wsStatus, setWsStatus] = React.useState<ConnectionStatus>('offline')
+  const [, setWsStatus] = React.useState<ConnectionStatus>('offline')
   const [expandedGroupIds, setExpandedGroupIds] = React.useState<Set<string>>(new Set())
   const [isNarrowScreen, setIsNarrowScreen] = React.useState(false)
 

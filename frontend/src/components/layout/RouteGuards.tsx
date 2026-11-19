@@ -12,7 +12,7 @@ import {
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const { status, user } = useSession()
+  const { status } = useSession()
   const location = useLocation()
 
   if (status === 'loading') {

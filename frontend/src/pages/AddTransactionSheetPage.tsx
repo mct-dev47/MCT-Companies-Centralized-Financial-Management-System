@@ -60,7 +60,6 @@ import {
   type ParticularItem,
 } from '@/utils/particularsUtils'
 import { cn } from '@/lib/utils'
-import { SALES_CATEGORY_LIST } from '@/utils/categoryConstants'
 import { bankService, isAccountOwnedBy, preferSoleOwnedBanks, type BankAccount } from '@/services/bankService'
 import { categoryService, type CompanyCategory } from '@/services/categoryService'
 import {
@@ -137,9 +136,7 @@ export const DEFAULT_EXPENSE_PAYMENT_METHODS = [
   'Petty Cash',
 ] as const
 
-const SALES_PAYMENT_METHODS = DEFAULT_SALES_PAYMENT_METHODS
 
-const EXPENSE_PAYMENT_METHODS = DEFAULT_EXPENSE_PAYMENT_METHODS
 
 export const DEFAULT_EXPENSE_CATEGORIES = [
   'Rendered Fee',
@@ -176,27 +173,6 @@ export const PREDEFINED_PETTY_CASH_CATEGORIES = [
 
 export const PREDEFINED_PETTY_CASH_PARTICULARS = PREDEFINED_PETTY_CASH_CATEGORIES
 
-const DEPRECATED_OLD_CATEGORIES = new Set([
-  'gcash',
-  'maya',
-  'panda',
-  'package 1',
-  'in-house',
-  'cheque',
-  'cash',
-  'bank transfer',
-  'paymongo',
-  'office supplies',
-  'kitchen & food supplies',
-  'utilities',
-  'salaries & wages',
-  'rent & lease',
-  'maintenance & repairs',
-  'transportation & logistics',
-  'marketing & advertising',
-  'equipment',
-  'petty cash replenishment',
-])
 
 const PETTY_CASH = 'Petty Cash'
 
@@ -275,10 +251,7 @@ const SPREADSHEET_STATUS_SELECT =
 
 // Aliases for compatibility
 const SALES_TH = SPREADSHEET_TH
-const SALES_TD = SPREADSHEET_TD
 const SALES_INPUT = SPREADSHEET_INPUT
-const SALES_NUM_INPUT = SPREADSHEET_NUM_INPUT
-const SALES_STATUS_SELECT = SPREADSHEET_STATUS_SELECT
 
 /** Display-only short date (MM/DD/YY). The stored value stays YYYY-MM-DD. */
 const toShortDate = (iso: string | null | undefined): string => {
@@ -3141,7 +3114,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
           `Row ${rowNumbers} failed and ${failedIdx.length === 1 ? 'is' : 'are'} still in the sheet: ${reasonSummary}`
       )
     }
-    const authorName = formatRealName(user?.fullName || user?.name || user?.email || 'Staff', user?.role || 'Staff')
+    const authorName = formatRealName(user?.fullName || user?.email || 'Staff', user?.role || 'Staff')
     const nowIso = new Date().toISOString()
 
     try {
@@ -4221,7 +4194,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                             savedParticulars={savedParticulars}
                             suggestions={getRowParticularSuggestions(index, row)}
                             onSaveToList={handleSaveParticularToList}
-                            onDeleteFromList={handleDeleteParticularFromList}
+                            onDeleteFromList={async (id: number) => handleDeleteParticularFromList(id)}
                             onKeyDown={(e) => handleCellKeyDown(e, index, 1)}
                             onPaste={(e) => handlePaste(e, index, 1)}
                             isPartial={row.isPartial && !row.particulars.trim()}
@@ -4280,7 +4253,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 handleRowChange(row.id, 'serviceFee', 0)
                               } else if (
                                 row.serviceFee === undefined ||
-                                row.serviceFee === ''
+                                (row.serviceFee as unknown as string) === ''
                               ) {
                                 handleRowChange(row.id, 'serviceFee', 0)
                               }
@@ -4304,7 +4277,7 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
                                 placeholder="0"
                                 value={
                                   row.serviceFee === 0 ||
-                                  row.serviceFee === '' ||
+                                  (row.serviceFee as unknown as string) === '' ||
                                   row.serviceFee === undefined
                                     ? ''
                                     : row.serviceFee

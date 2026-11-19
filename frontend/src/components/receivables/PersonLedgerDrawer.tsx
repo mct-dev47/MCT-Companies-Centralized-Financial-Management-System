@@ -20,7 +20,6 @@ import {
   Sparkles,
   Edit2,
   Trash2,
-  AlertTriangle,
   Lock,
 } from 'lucide-react'
 import { formatPHP } from '@/lib/format'

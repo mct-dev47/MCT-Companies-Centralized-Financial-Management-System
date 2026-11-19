@@ -33,12 +33,9 @@ import { FormFieldError } from '@/components/common/FormFieldError'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { formatPHP, formatPersonInitialAndLastName } from '@/lib/format'
-import { CATEGORY_COLORS } from '@/utils/categoryConstants'
+import { formatPHP } from '@/lib/format'
 import { normalizeDateToYYYYMMDD, formatToYYYYMMDD, formatDisplayDate } from '@/utils/dateUtils'
 import { bankService } from '@/services/bankService'
-import { useDailyRemarks } from '@/hooks/useDailyRemarks'
-import { DayRemarkCell } from './DayRemark'
 import { notifyError, notifyWarning } from '@/utils/errorUtils'
 import {
   salesService,
@@ -441,8 +438,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
   const displayPaymentMethod = isEditing
     ? paymentMethod
     : activeSale?.paymentMethod || activeExpense?.paymentMethod || activeTx?.paymentMethod || 'Cash'
-  const categoryColor =
-    CATEGORY_COLORS[displayCategory as keyof typeof CATEGORY_COLORS] || '#475569'
 
   const displayDate =
     activeSale?.date || activeExpense?.date || activeLoan?.date || activeTx?.date || '—'
@@ -463,26 +458,6 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         return depositSource.bankName || undefined
       })()
     : undefined
-  // Day remark (spec 0041): one note per company, per date, per kind. Sales and expense records only.
-  const dayRemarkKind: 'sales' | 'expense' | null = isLoan
-    ? null
-    : isExpense
-      ? 'expense'
-      : activeSale || activeTx?.type === 'Sales'
-        ? 'sales'
-        : null
-  const dayRemarkCompany = displayCompany === '—' ? '' : displayCompany
-  const dayRemarkDate =
-    activeSale?.rawDate ||
-    activeExpense?.rawDate ||
-    normalizeDateToYYYYMMDD(activeSale?.date || activeExpense?.date || activeTx?.date || '')
-  const { getRemark: getDayRemark, saveRemark: saveDayRemark } = useDailyRemarks(
-    dayRemarkKind ?? 'sales',
-    dayRemarkKind && dayRemarkCompany ? [dayRemarkCompany] : []
-  )
-  const canEditDayRemark =
-    !viewOnly &&
-    (roleLower === 'finance' || roleLower === 'supervisor' || roleLower === 'company')
 
   const displayChequeNo =
     activeSale?.chequeNo || activeExpense?.chequeNo || activeLoan?.chequeNo || activeTx?.chequeNo || '—'
@@ -979,7 +954,7 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
     setIsSubmitting(true)
 
     const parsedAmount = parseFloat(cleanAmount)
-    const modifierName = formatRealName(user?.fullName || user?.name || user?.email || 'Authorized User', user?.role || 'Staff')
+    const modifierName = formatRealName(user?.fullName || user?.fullName || user?.email || user?.email || 'Authorized User', user?.role || 'Staff')
     const nowIso = new Date().toISOString()
 
     try {
