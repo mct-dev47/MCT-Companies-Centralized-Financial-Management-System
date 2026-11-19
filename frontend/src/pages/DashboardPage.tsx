@@ -161,13 +161,34 @@ export const DashboardPage: React.FC = () => {
         }
       }, 400)
     }
-    const unsubs = (['AUDIT_UPDATED', 'LOANS_UPDATED', 'PETTY_CASH_UPDATED', 'BANK_UPDATED', 'TENANTS_UPDATED', 'LENDING_UPDATED', 'SALES_UPDATED', 'EXPENSES_UPDATED'] as const).map(
-      (event) => websocketService.subscribe(event, reload)
-    )
+    const unsubs = (
+      [
+        'AUDIT_UPDATED',
+        'LOANS_UPDATED',
+        'BILLS_UPDATED',
+        'PETTY_CASH_UPDATED',
+        'BANK_UPDATED',
+        'TENANTS_UPDATED',
+        'LENDING_UPDATED',
+        'RECEIVABLES_UPDATED',
+        'SALES_UPDATED',
+        'EXPENSES_UPDATED',
+        'EXPENSE_CREATED',
+        'EXPENSE_UPDATED',
+        'EXPENSE_DELETED',
+        'TRANSACTION_UPDATED',
+      ] as const
+    ).map((event) => websocketService.subscribe(event, reload))
+    const unsubStatus = websocketService.subscribe('WS_STATUS_CHANGE', (status) => {
+      if (status === 'connected') {
+        reload()
+      }
+    })
     return () => {
       mounted = false
       if (timer) window.clearTimeout(timer)
       unsubs.forEach((off) => off())
+      unsubStatus()
     }
   }, [isAdmin, activeCompany, filters.dateRange.startDate, filters.dateRange.endDate])
 

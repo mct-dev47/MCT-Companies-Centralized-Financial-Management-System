@@ -196,7 +196,7 @@ export const SalesPage: React.FC = () => {
   const [tableTab, setTableTab] = React.useState<'Deposit' | 'Sales Record'>(
     'Sales Record'
   )
-  const [subTab, setSubTab] = React.useState<'Daily Summary' | 'All Transactions'>('Daily Summary')
+  const [subTab, setSubTab] = React.useState<'Daily Summary' | 'All Transactions'>('All Transactions')
   const [expandedDates, setExpandedDates] = React.useState<Set<string>>(new Set())
   const [expandedDepositIds, setExpandedDepositIds] = React.useState<Set<string>>(new Set())
   const [dailyPage, setDailyPage] = React.useState(1)
