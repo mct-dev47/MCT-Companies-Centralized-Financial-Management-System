@@ -130,7 +130,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   // Filter state: strictly locked to activeCompany chosen in Centralized Auth
   const selectedCompany = activeCompany || assignedCompany
   const [statusFilter, setStatusFilter] = React.useState<string>('All')
-  const [approvalTab, setApprovalTab] = React.useState<'Approve' | 'Pending'>('Pending')
   const [selectedPeriod, setSelectedPeriod] = React.useState<PeriodOption>('All Periods')
   const [dateRange, setDateRange] = React.useState<DateRange>({
     preset: 'All Dates',
@@ -413,9 +412,9 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
       return ['All', 'Pending Audit Approval', 'Approved', 'Disbursed', 'Paid', 'Partially Paid', 'Disapproved by Audit']
     }
     if (canApprove) {
-      return ['All', 'Pending Finance Endorsement', 'Pending Audit Approval', 'Approved', 'Disbursed', 'Paid', 'Partially Paid', 'Rejected by Finance']
+      return ['All', 'Pending Finance Endorsement', 'Pending Audit Approval', 'Approved', 'Disbursed', 'Paid', 'Partially Paid', 'Rejected by Finance', 'Disapproved by Audit']
     }
-    return ['All', 'Pending Finance Endorsement', 'Pending Audit Approval', 'Approved', 'Disbursed', 'Paid', 'Partially Paid']
+    return ['All', 'Pending Finance Endorsement', 'Pending Audit Approval', 'Approved', 'Disbursed', 'Paid', 'Partially Paid', 'Disapproved by Audit']
   }, [isAuditor, canApprove])
 
   // Client-side filtering and sorting
@@ -450,25 +449,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
         if (!isDateInRange(item.rawDate || item.date, dateRange.startDate, dateRange.endDate)) {
           return false
-        }
-
-        // Approve / Pending segmented tab filter
-        const statusLower = (item.status || '').trim().toLowerCase()
-        const isPendingLoan =
-          item.status === 'Pending Finance Endorsement' ||
-          item.status === 'Pending Approval' ||
-          item.status === 'Pending Audit Approval' ||
-          statusLower.includes('pending')
-        const isRejectedLoan =
-          item.status === 'Rejected by Finance' ||
-          item.status === 'Disapproved by Audit' ||
-          statusLower.includes('rejected') ||
-          statusLower.includes('disapproved')
-
-        if (approvalTab === 'Pending') {
-          if (!isPendingLoan) return false
-        } else if (approvalTab === 'Approve') {
-          if (isPendingLoan || isRejectedLoan) return false
         }
 
         if (statusFilter !== 'All') {
@@ -513,11 +493,11 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
         if (cmp !== 0) return cmp
         return (b.createdAt || b.id).localeCompare(a.createdAt || a.id)
       })
-  }, [loans, isAuditor, assignedCompany, selectedCompany, loanType, dateRange, statusFilter, searchQuery, approvalTab])
+  }, [loans, isAuditor, assignedCompany, selectedCompany, loanType, dateRange, statusFilter, searchQuery])
 
   React.useEffect(() => {
     setCurrentPage(1)
-  }, [dateRange, searchQuery, selectedCompany, selectedPeriod, loanType, statusFilter, approvalTab])
+  }, [dateRange, searchQuery, selectedCompany, selectedPeriod, loanType, statusFilter])
 
   // Total Loans KPI
   const kpis = React.useMemo(() => {
@@ -558,12 +538,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
   const handleLoanAdded = (newItem: LoanItem) => {
     setLoans((prev) => [newItem, ...prev])
     setSearchQuery('')
-    const isNewPending =
-      newItem.status === 'Pending Finance Endorsement' ||
-      newItem.status === 'Pending Approval' ||
-      newItem.status === 'Pending Audit Approval' ||
-      (newItem.status || '').toLowerCase().includes('pending')
-    setApprovalTab(isNewPending ? 'Pending' : 'Approve')
 
     const newDateIso = newItem.rawDate || normalizeDateToYYYYMMDD(newItem.date)
     if (!isDateInRange(newDateIso, dateRange.startDate, dateRange.endDate)) {
@@ -865,7 +839,7 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
                   )}
                 >
                   <span className="font-medium text-focus/90 truncate flex-1 text-left">
-                    {statusFilter === 'All' ? 'Status' : statusFilter}
+                    {statusFilter === 'All' ? 'All Status' : statusFilter}
                   </span>
                   <ChevronDown
                     className={cn(
@@ -913,37 +887,6 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
               </div>
             </div>
 
-            {/* Tab Switcher: Approve / Pending (Segmented toggle styled like screenshot, active filled with brand color) */}
-            <div
-              role="group"
-              aria-label="Filter loans by approval status"
-              className="inline-flex items-center rounded-[10px] border border-stroke/60 bg-slate-100/80 p-0.5 sm:p-1 shrink-0 h-11 self-start lg:self-auto"
-            >
-              <button
-                type="button"
-                onClick={() => setApprovalTab('Approve')}
-                className={cn(
-                  'inline-flex items-center justify-center h-full px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
-                  approvalTab === 'Approve'
-                    ? 'bg-[#960C01] text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white/60 hover:text-focus'
-                )}
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                onClick={() => setApprovalTab('Pending')}
-                className={cn(
-                  'inline-flex items-center justify-center h-full px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all cursor-pointer select-none',
-                  approvalTab === 'Pending'
-                    ? 'bg-[#960C01] text-white shadow-xs'
-                    : 'text-focus/70 hover:bg-white/60 hover:text-focus'
-                )}
-              >
-                Pending
-              </button>
-            </div>
           </div>
 
           {/* Row 2: Search Bar */}
