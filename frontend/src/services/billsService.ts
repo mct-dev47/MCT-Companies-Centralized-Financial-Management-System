@@ -1,4 +1,5 @@
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
+import { saveAuditReview as saveSharedAuditReview } from './auditReviewApi'
 
 export interface BillPaymentRecord {
   id: string
@@ -138,6 +139,10 @@ type BackendBill = {
   due_date_reminder: number
   notes?: string
   status: 'unpaid' | 'paid' | 'overdue' | 'due soon' | 'partially paid'
+  audit_status?: 'Verified' | 'Pending Audit' | 'Flagged'
+  audited_by?: string | null
+  audited_at?: string | null
+  audit_remarks?: string | null
   created_at?: string
   updated_at?: string
   payments?: Array<{
@@ -342,6 +347,12 @@ function mapBackendBill(data: BackendBill): BillItem {
     billingCycle: recurring,
     reminderDaysBefore: data.due_date_reminder ?? 3,
     status: mapStatus(data.status),
+    auditStatus:
+      data.audit_status === 'Verified' || data.audit_status === 'Flagged'
+        ? data.audit_status
+        : undefined,
+    auditedBy: data.audited_by || undefined,
+    auditDate: data.audited_at || undefined,
     notes: data.notes || '',
     lastPaidDate: latestPayment?.paymentDate,
     lastPaymentMethod: latestPayment?.paymentMethod,
@@ -805,5 +816,13 @@ export const billsService = {
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
+  },
+
+  async saveAuditReview(
+    billId: string,
+    status: 'Verified' | 'Flagged' | 'Pending Audit',
+    remarks?: string
+  ): Promise<void> {
+    await saveSharedAuditReview('bills', billId, status, remarks)
   },
 }

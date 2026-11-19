@@ -205,6 +205,10 @@ class PettyCashTopUpOut(BaseModel):
     remark: Optional[str] = None
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
+    audit_status: str = "Pending Audit"
+    audited_by: Optional[str] = None
+    audited_at: Optional[datetime] = None
+    audit_remarks: Optional[str] = None
     created_by: Optional[int] = None
     created_at: Optional[datetime] = None
     total_expenses: Optional[Decimal] = None
@@ -346,6 +350,10 @@ class PettyCashMovementOut(BaseModel):
     finance_remark: Optional[str] = None
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
+    audit_status: str = "Pending Audit"
+    audited_by: Optional[str] = None
+    audited_at: Optional[datetime] = None
+    audit_remarks: Optional[str] = None
     remark: Optional[str] = None
     created_by: Optional[int] = None
     created_by_name: Optional[str] = None
@@ -391,6 +399,10 @@ class PettyCashLedgerEntry(BaseModel):
     remark: Optional[str] = None
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
+    audit_status: str = "Pending Audit"
+    audited_by: Optional[str] = None
+    audited_at: Optional[datetime] = None
+    audit_remarks: Optional[str] = None
     created_at: Optional[datetime] = None
     # Funding bank chosen by Finance (spec 0012), shown to the reader (spec 0014).
     # The account number is deliberately not included.

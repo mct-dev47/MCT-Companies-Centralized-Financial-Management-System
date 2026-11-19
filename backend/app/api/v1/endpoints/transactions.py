@@ -400,42 +400,49 @@ def list_transactions(
             if st_lower in ("cancelled", "canceled", "transfer cancelled"):
                 continue
 
+            if getattr(p, "audit_status", None) in ("Verified", "Flagged"):
+                row_audit_status = p.audit_status
+            elif st_lower in ("disapproved by audit", "disapproved"):
+                row_audit_status = "Flagged"
+            elif st_lower in ("rejected by finance", "rejected"):
+                row_audit_status = "Pending Audit"
+            elif st_lower in ("transfer in transit", "return pending", "transfer received", "reimbursed", "settled", "approved"):
+                row_audit_status = "Verified" if p.reviewed_by else "Pending Audit"
+            elif "pending" in st_lower:
+                row_audit_status = "Pending Audit"
+            else:
+                row_audit_status = "Verified" if p.reviewed_by else "Pending Audit"
+
             if st_lower in ("disapproved by audit", "disapproved"):
                 row_status = "Disapproved"
                 base_withdrawal = 0.0
                 row_awaiting = False
-                row_audit_status = "Flagged"
                 row_paid = 0.0
             elif st_lower in ("rejected by finance", "rejected"):
                 row_status = "Rejected"
                 base_withdrawal = 0.0
                 row_awaiting = False
-                row_audit_status = "Pending Audit"
                 row_paid = 0.0
             elif st_lower in ("transfer in transit", "return pending"):
                 # Bank cash already left the funding account
                 row_status = "In Transit"
                 base_withdrawal = amt if p.bank_account_id else 0.0
                 row_awaiting = False
-                row_audit_status = "Verified" if p.reviewed_by else "Pending Audit"
                 row_paid = amt
             elif st_lower in ("transfer received", "reimbursed", "settled", "approved"):
                 row_status = "Paid"
                 base_withdrawal = amt if p.bank_account_id else 0.0
                 row_awaiting = False
-                row_audit_status = "Verified" if p.reviewed_by else "Pending Audit"
                 row_paid = amt
             elif "pending" in st_lower:
                 row_status = "Pending"
                 base_withdrawal = 0.0
                 row_awaiting = True
-                row_audit_status = "Pending Audit"
                 row_paid = 0.0
             else:
                 row_status = "Paid"
                 base_withdrawal = amt if p.bank_account_id else 0.0
                 row_awaiting = False
-                row_audit_status = "Verified" if p.reviewed_by else "Pending Audit"
                 row_paid = amt
 
             # Determine which company views to emit (accounting for shared co-owned banks)
@@ -474,9 +481,9 @@ def list_transactions(
                         paymentMethod="Bank Transfer" if p.bank_account_id else "Cash",
                         status=row_status,
                         auditStatus=row_audit_status,
-                        auditedBy=p.reviewed_by,
-                        auditNotes=p.remark,
-                        auditDate=p.reviewed_at.isoformat() if p.reviewed_at else None,
+                        auditedBy=getattr(p, "audited_by", None) or p.reviewed_by,
+                        auditNotes=getattr(p, "audit_remarks", None) or p.remark,
+                        auditDate=(p.audited_at.isoformat() if getattr(p, "audited_at", None) else (p.reviewed_at.isoformat() if p.reviewed_at else None)),
                         createdAt=p.created_at.isoformat() if p.created_at else None,
                         paidAmount=row_paid,
                         bankAccountId=out_bank_id,
@@ -731,9 +738,12 @@ def list_transactions(
             principal = float(ln.principal_amount or 0)
             ln_date = ln.loan_date.isoformat() if ln.loan_date else datetime.now(timezone.utc).date().isoformat()
 
-            # Pre-disbursement audit approval is not ledger audit.
-            # Keep auditStatus as "Pending Audit" to prevent auto-auditing.
-            loan_audit_st = "Pending Audit"
+            # Pre-disbursement audit approval (audit_reviewed_by) is not ledger audit.
+            # Ledger audit is stored in ln.audit_status (default Pending Audit).
+            loan_audit_st = getattr(ln, "audit_status", None) or "Pending Audit"
+            loan_audited_by = getattr(ln, "audited_by", None)
+            loan_audited_at = ln.audited_at.isoformat() if getattr(ln, "audited_at", None) else None
+            loan_audit_notes = getattr(ln, "audit_remarks", None) or ln.audit_remark
 
             # Borrower's bank account for receiving loan deposit
             borrower_acc = disb_bank_by_loan.get(ln.loan_id) or borrower_acc_map.get(ln.borrower)
@@ -762,9 +772,9 @@ def list_transactions(
                         category="Loan",
                         status="Paid",
                         auditStatus=loan_audit_st,
-                        auditedBy=None,
-                        auditNotes=ln.audit_remark,
-                        auditDate=None,
+                        auditedBy=loan_audited_by,
+                        auditNotes=loan_audit_notes,
+                        auditDate=loan_audited_at,
                         bankAccountId=borrower_bank_id,
                         bankName=borrower_bank_name,
                         remarks=ln.finance_remark,
@@ -792,9 +802,9 @@ def list_transactions(
                         category="Loan",
                         status="Paid",
                         auditStatus=loan_audit_st,
-                        auditedBy=None,
-                        auditNotes=ln.audit_remark,
-                        auditDate=None,
+                        auditedBy=loan_audited_by,
+                        auditNotes=loan_audit_notes,
+                        auditDate=loan_audited_at,
                         bankAccountId=ln.bank_account_id,
                         bankName=bank_name_map.get(ln.bank_account_id),
                         remarks=ln.finance_remark,
@@ -832,7 +842,10 @@ def list_transactions(
                             deposit=rep_amt,
                             category="Loan Repayment",
                             status="Paid",
-                            auditStatus="Pending Audit",
+                            auditStatus=getattr(rep, "audit_status", None) or "Pending Audit",
+                            auditedBy=getattr(rep, "audited_by", None),
+                            auditNotes=getattr(rep, "audit_remarks", None),
+                            auditDate=rep.audited_at.isoformat() if getattr(rep, "audited_at", None) else None,
                             bankAccountId=ln.bank_account_id,
                             bankName=bank_name_map.get(ln.bank_account_id),
                             createdAt=rep.created_at.isoformat() if rep.created_at else None,
@@ -966,10 +979,18 @@ def list_transactions(
                     category="Food Receivable",
                     paymentMethod=pmt.payment_method or "Cash",
                     status="Paid",
-                    auditStatus=(parent_sale.audit_status if parent_sale else None) or "Pending Audit",
-                    auditedBy=parent_sale.audited_by if parent_sale else None,
-                    auditNotes=parent_sale.audit_remarks if parent_sale else None,
-                    auditDate=parent_sale.audited_at.isoformat() if parent_sale and parent_sale.audited_at else None,
+                    auditStatus=(
+                        rec.audit_status
+                        if getattr(rec, "audit_status", None) in ("Verified", "Flagged")
+                        else ((parent_sale.audit_status if parent_sale else None) or getattr(rec, "audit_status", None) or "Pending Audit")
+                    ),
+                    auditedBy=getattr(rec, "audited_by", None) or (parent_sale.audited_by if parent_sale else None),
+                    auditNotes=getattr(rec, "audit_remarks", None) or (parent_sale.audit_remarks if parent_sale else None),
+                    auditDate=(
+                        rec.audited_at.isoformat()
+                        if getattr(rec, "audited_at", None)
+                        else (parent_sale.audited_at.isoformat() if parent_sale and parent_sale.audited_at else None)
+                    ),
                     createdAt=pmt.created_at.isoformat() if pmt.created_at else None,
                     paidAmount=amt,
                     bankAccountId=pmt.bank_account_id,

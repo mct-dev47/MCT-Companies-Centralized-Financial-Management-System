@@ -34,6 +34,10 @@ export interface UtangSale {
   sale_id?: number | null
   sale_line_index?: number | null
   is_locked?: boolean
+  auditStatus?: 'Verified' | 'Pending Audit' | 'Flagged'
+  auditedBy?: string
+  auditDate?: string
+  auditRemarks?: string
   date: string // YYYY-MM-DD
   customer_name: string
   customer_type: CustomerType
@@ -155,6 +159,10 @@ class ReceivablesStore {
             sale_id: r.sale_id ?? null,
             sale_line_index: r.sale_line_index ?? null,
             is_locked: Boolean(r.is_locked),
+            auditStatus: r.audit_status || 'Pending Audit',
+            auditedBy: r.audited_by || undefined,
+            auditDate: r.audited_at || undefined,
+            auditRemarks: r.audit_remarks || undefined,
             date: r.transaction_date,
             customer_name: r.customer_name,
             customer_type: (r.customer_type === 'Internal' ? 'Staff' : 'External') as CustomerType,

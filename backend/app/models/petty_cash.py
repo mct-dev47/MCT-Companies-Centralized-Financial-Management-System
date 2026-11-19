@@ -53,6 +53,10 @@ class PettyCashTopUp(Base):
     remark = Column(Text, nullable=True)
     reviewed_by = Column(String(100), nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    audit_status = Column(String(20), nullable=False, default="Pending Audit", server_default="Pending Audit")
+    audited_by = Column(String(100), nullable=True)
+    audited_at = Column(DateTime(timezone=True), nullable=True)
+    audit_remarks = Column(Text, nullable=True)
     created_by = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

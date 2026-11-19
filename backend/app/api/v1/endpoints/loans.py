@@ -645,6 +645,10 @@ def get_loans(
             audit_reviewed_by=getattr(l, "audit_reviewed_by", None),
             audit_reviewed_at=getattr(l, "audit_reviewed_at", None),
             audit_remark=getattr(l, "audit_remark", None),
+            audit_status=getattr(l, "audit_status", None) or "Pending Audit",
+            audited_by=getattr(l, "audited_by", None),
+            audited_at=getattr(l, "audited_at", None),
+            audit_remarks=getattr(l, "audit_remarks", None),
             disbursed_by=getattr(l, "disbursed_by", None),
             disbursed_at=getattr(l, "disbursed_at", None),
             bank_account_id=getattr(l, "bank_account_id", None),
@@ -779,6 +783,10 @@ def _export_loans_unbounded(
             audit_reviewed_by=getattr(l, "audit_reviewed_by", None),
             audit_reviewed_at=getattr(l, "audit_reviewed_at", None),
             audit_remark=getattr(l, "audit_remark", None),
+            audit_status=getattr(l, "audit_status", None) or "Pending Audit",
+            audited_by=getattr(l, "audited_by", None),
+            audited_at=getattr(l, "audited_at", None),
+            audit_remarks=getattr(l, "audit_remarks", None),
             disbursed_by=getattr(l, "disbursed_by", None),
             disbursed_at=getattr(l, "disbursed_at", None),
             bank_account_id=getattr(l, "bank_account_id", None),
@@ -1291,7 +1299,7 @@ def _move_loan_funds(db: Session, *, loan_id: int, sql_loan, final_source: dict,
             particulars=f"Loan: {clean_particular} (to {b_name_disp})",
             category="Bank Transfer",
             reference_no=loan_ref,
-        ))
+        ), source_loan_id=loan_id)
         ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": funding_acc.id}})
     except HTTPException:
         raise
@@ -1323,7 +1331,7 @@ def _move_loan_funds(db: Session, *, loan_id: int, sql_loan, final_source: dict,
                 particulars=f"Loan: {clean_particular} (from {l_name_disp})",
                 category="Bank Transfer",
                 reference_no=loan_ref,
-            ))
+            ), source_loan_id=loan_id)
             ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": borrower_acc.id}})
         except Exception as exc:
             print(f"Loan disbursement borrower bank deposit error: {exc}")
@@ -2717,4 +2725,80 @@ def backfill_loan_repayment_links(db: Session) -> int:
         db.rollback()
         print(f"Loan repayment link backfill skipped: {exc}")
     return linked
+
+
+@router.patch("/{loan_id}/audit", summary="Save the ledger audit review of a loan (Auditor only)")
+def review_loan_audit(
+    loan_id: int,
+    review_in: dict,
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
+    db: Session = Depends(get_db),
+):
+    from app.schemas.audit_review import AuditReviewIn
+    from app.services.audit_review_service import apply_audit_review
+
+    payload = AuditReviewIn(**review_in)
+    ln = db.query(Loan).filter(Loan.loan_id == loan_id).first()
+    if ln:
+        # Check company access on borrower or lender
+        try:
+            check_company_access(current_user, ln.borrower)
+        except HTTPException:
+            if ln.lender:
+                check_company_access(current_user, ln.lender)
+            else:
+                raise
+    apply_audit_review(
+        db,
+        current_user,
+        model=Loan,
+        pk_column="loan_id",
+        supabase_table="loan",
+        record_id=loan_id,
+        payload=payload,
+        not_found="Loan not found",
+    )
+    system_cache.invalidate_tag("loans")
+    ws_manager.broadcast_sync({"type": "LOANS_UPDATED", "payload": {"action": "audited", "loan_id": loan_id}})
+    ln = db.query(Loan).filter(Loan.loan_id == loan_id).first()
+    return {
+        "loan_id": loan_id,
+        "audit_status": getattr(ln, "audit_status", "Pending Audit") if ln else payload.audit_status,
+        "audited_by": getattr(ln, "audited_by", None) if ln else None,
+        "audited_at": ln.audited_at.isoformat() if ln and getattr(ln, "audited_at", None) else None,
+        "audit_remarks": getattr(ln, "audit_remarks", None) if ln else None,
+    }
+
+
+@router.patch("/repayments/{repayment_id}/audit", summary="Save the ledger audit review of a loan repayment (Auditor only)")
+def review_loan_repayment_audit(
+    repayment_id: int,
+    review_in: dict,
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
+    db: Session = Depends(get_db),
+):
+    from app.schemas.audit_review import AuditReviewIn
+    from app.services.audit_review_service import apply_audit_review
+
+    payload = AuditReviewIn(**review_in)
+    apply_audit_review(
+        db,
+        current_user,
+        model=LoanRepayment,
+        pk_column="loan_repayment_id",
+        supabase_table="loans_repayments",
+        record_id=repayment_id,
+        payload=payload,
+        not_found="Loan repayment not found",
+    )
+    system_cache.invalidate_tag("loans")
+    ws_manager.broadcast_sync({"type": "LOANS_UPDATED", "payload": {"action": "audited", "repayment_id": repayment_id}})
+    rep = db.query(LoanRepayment).filter(LoanRepayment.loan_repayment_id == repayment_id).first()
+    return {
+        "loan_repayment_id": repayment_id,
+        "audit_status": getattr(rep, "audit_status", "Pending Audit") if rep else payload.audit_status,
+        "audited_by": getattr(rep, "audited_by", None) if rep else None,
+        "audited_at": rep.audited_at.isoformat() if rep and getattr(rep, "audited_at", None) else None,
+        "audit_remarks": getattr(rep, "audit_remarks", None) if rep else None,
+    }
 

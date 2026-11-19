@@ -136,6 +136,10 @@ class BillPeriodOut(BaseModel):
 class BillOut(BillBase):
     bill_id: int
     latest_amount: Optional[Decimal] = None
+    audit_status: str = "Pending Audit"
+    audited_by: Optional[str] = None
+    audited_at: Optional[datetime] = None
+    audit_remarks: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     payments: List[BillPaymentOut] = []

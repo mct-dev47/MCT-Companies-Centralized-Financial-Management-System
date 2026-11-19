@@ -5,10 +5,12 @@ from sqlalchemy.orm import Session
 
 from app.core.company_resolver import resolve_company
 from app.core.dependencies import (
+    AuthenticatedUser,
     BusinessReader,
     BusinessWriter,
     check_company_access,
     get_authorized_company_scope,
+    require_auditor_user,
 )
 from app.core.pagination import PaginationParams
 from app.db.session import get_db
@@ -325,3 +327,60 @@ def delete_payment(
     actor = user.get("email") or f"user-{user.get('user_id')}"
     service.delete_payment(payment_id, actor_name=actor)
     return {"detail": "Payment reversed successfully"}
+
+
+@router.patch("/{receivable_id}/audit", summary="Save the audit review of a receivable (Auditor only)")
+def review_receivable_audit(
+    receivable_id: int,
+    review_in: dict,
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
+    db: Session = Depends(get_db),
+):
+    from app.models.receivable import Receivable
+    from app.schemas.audit_review import AuditReviewIn
+    from app.services.audit_review_service import apply_audit_review
+    from app.core.websocket import ws_manager
+
+    payload = AuditReviewIn(**review_in)
+    apply_audit_review(
+        db,
+        current_user,
+        model=Receivable,
+        pk_column="receivable_id",
+        supabase_table="receivables",
+        record_id=receivable_id,
+        payload=payload,
+        not_found="Receivable not found",
+    )
+    ws_manager.broadcast_sync({"type": "RECEIVABLES_UPDATED", "payload": {"action": "audited", "receivable_id": receivable_id}})
+    return ReceivablesService(db).get_receivable(receivable_id)
+
+
+@router.patch("/payments/{payment_id}/audit", summary="Save the audit review of a receivable payment (Auditor only)")
+def review_receivable_payment_audit(
+    payment_id: int,
+    review_in: dict,
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
+    db: Session = Depends(get_db),
+):
+    from app.models.receivable import Receivable, ReceivablePayment
+    from app.schemas.audit_review import AuditReviewIn
+    from app.services.audit_review_service import apply_audit_review
+    from app.core.websocket import ws_manager
+
+    pmt = db.query(ReceivablePayment).filter(ReceivablePayment.payment_id == payment_id).first()
+    if not pmt:
+        raise HTTPException(status_code=404, detail="Receivable payment not found")
+    payload = AuditReviewIn(**review_in)
+    apply_audit_review(
+        db,
+        current_user,
+        model=Receivable,
+        pk_column="receivable_id",
+        supabase_table="receivables",
+        record_id=pmt.receivable_id,
+        payload=payload,
+        not_found="Receivable not found",
+    )
+    ws_manager.broadcast_sync({"type": "RECEIVABLES_UPDATED", "payload": {"action": "audited", "receivable_id": pmt.receivable_id}})
+    return ReceivablesService(db).get_receivable(pmt.receivable_id)

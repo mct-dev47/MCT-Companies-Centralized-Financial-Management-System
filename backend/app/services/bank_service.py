@@ -483,7 +483,7 @@ class BankService:
         self.db.refresh(account)
         return account
 
-    def deposit(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None, source_loan_repayment_id: Optional[int] = None, source_receivable_payment_id: Optional[int] = None, commit: bool = True) -> Tuple[BankAccount, BankTransaction]:
+    def deposit(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None, source_loan_repayment_id: Optional[int] = None, source_receivable_payment_id: Optional[int] = None, source_loan_id: Optional[int] = None, source_topup_id: Optional[int] = None, commit: bool = True) -> Tuple[BankAccount, BankTransaction]:
         account = self._get_account_for_update(account_id)
         if not account:
             raise ValueError("Bank account not found.")
@@ -510,6 +510,8 @@ class BankService:
             source_sale_id=source_sale_id,
             source_loan_repayment_id=source_loan_repayment_id,
             source_receivable_payment_id=source_receivable_payment_id,
+            source_loan_id=source_loan_id,
+            source_topup_id=source_topup_id,
             company_name=self.resolve_tx_company(account, data.company_name),
         )
         tx._entry_source = entry_source
@@ -524,7 +526,7 @@ class BankService:
             self.db.flush()
         return account, tx
 
-    def withdraw(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None) -> Tuple[BankAccount, BankTransaction]:
+    def withdraw(self, account_id: str, data: BankDepositWithdrawRequest, source_sale_id: Optional[int] = None, entry_source: Optional[str] = None, source_loan_id: Optional[int] = None, source_topup_id: Optional[int] = None) -> Tuple[BankAccount, BankTransaction]:
         account = self._get_account_for_update(account_id)
         if not account:
             raise ValueError("Bank account not found.")
@@ -553,6 +555,8 @@ class BankService:
             category=tx_category,
             net_amount=amount,
             source_sale_id=source_sale_id,
+            source_loan_id=source_loan_id,
+            source_topup_id=source_topup_id,
             company_name=self.resolve_tx_company(account, data.company_name),
         )
         tx._entry_source = entry_source

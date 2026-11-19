@@ -27,6 +27,7 @@ import { Card } from '@/components/ui/card'
 import { TablePagination, TableSkeleton, TableEmptyState, TableErrorState, ConfirmModal, CardSkeleton } from '@/components/common'
 import { Skeleton } from '@/components/ui/skeleton'
 import { notifyError, notifyWarning } from '@/utils/errorUtils'
+import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 import {
   Table,
   TableHeader,
@@ -218,14 +219,16 @@ export const BillsPage: React.FC = () => {
         })
         .catch(() => {})
     }
-    const unsub = websocketService.subscribe('BILLS_UPDATED', refreshSilently)
+    const unsubBills = websocketService.subscribe('BILLS_UPDATED', refreshSilently)
+    const unsubAudit = websocketService.subscribe('AUDIT_UPDATED', refreshSilently)
     return () => {
       active = false
-      unsub()
+      unsubBills()
+      unsubAudit()
     }
   }, [selectedCompany])
 
-  const handleMarkBillAudit = (bill: BillItem, status: 'Verified' | 'Flagged') => {
+  const handleMarkBillAudit = async (bill: BillItem, status: 'Verified' | 'Flagged') => {
     const timestamp = new Date().toLocaleString('en-US', {
       month: 'short',
       day: '2-digit',
@@ -246,6 +249,12 @@ export const BillsPage: React.FC = () => {
     setOpenMenuBillId(null)
     setMenuPosition(null)
     setActiveMenuBill(null)
+    try {
+      await billsService.saveAuditReview(bill.id, status)
+    } catch (err) {
+      reportAuditSaveFailure(err)
+      void loadBills()
+    }
   }
 
   React.useEffect(() => {
