@@ -1817,24 +1817,26 @@ export const TransactionPage: React.FC = () => {
     const pendingCount = getDayAuditTargets(dayTxs).length
     if (pendingCount === 0) return null
     return (
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
         <Button
           type="button"
+          size="sm"
           onClick={() => openDayAudit('Verified', date, dayTxs)}
           title={`Mark ${pendingCount} pending record(s) on ${date} as audited`}
-          className="h-9 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+          className="h-7 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold shadow-xs inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
         >
-          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+          <CheckCircle2 className="w-3 h-3 shrink-0" />
           <span>Mark as Audited ({pendingCount})</span>
         </Button>
         <Button
           type="button"
+          size="sm"
           variant="outline"
           onClick={() => openDayAudit('Flagged', date, dayTxs)}
           title={`Flag ${pendingCount} pending record(s) on ${date} as a discrepancy`}
-          className="h-9 px-3 rounded-lg border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+          className="h-7 px-2.5 rounded-md border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-[11px] font-semibold shadow-xs inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
         >
-          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+          <AlertCircle className="w-3 h-3 shrink-0" />
           <span>Flag Discrepancy</span>
         </Button>
       </div>
