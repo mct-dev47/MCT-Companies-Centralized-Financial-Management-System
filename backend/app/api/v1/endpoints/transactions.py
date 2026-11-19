@@ -304,7 +304,7 @@ def list_transactions(
                 TransactionOut(
                     id=f"exp_{e.expense_id}",
                     refNo=f"EXP-{e.expense_id:04d}",
-                    chequeNo="",
+                    chequeNo=e.cheque_no or "",
                     date=exp_date_iso or "",
                     saleDate=exp_date_iso,
                     type="Expense",
