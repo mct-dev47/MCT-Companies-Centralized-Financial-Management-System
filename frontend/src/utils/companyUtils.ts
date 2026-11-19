@@ -59,14 +59,21 @@ export function isCompanyMatch(
     return true
   }
 
-  // 3. Token-based matching on significant distinctive words
+  // 3. Token-based matching: require all distinctive tokens of the shorter name
+  // to appear in the longer name so two distinct companies sharing one generic
+  // word (e.g. "JK Property ..." vs "Golden Jupiter Property ...") never match.
   const extractTokens = (str: string) =>
     str
       .split(/[^a-z0-9]+/)
-      .filter((w) => w.length >= 4 && !COMMON_STOP_WORDS.has(w))
+      .filter((w) => w.length >= 2 && !COMMON_STOP_WORDS.has(w))
 
   const tokensA = extractTokens(a)
   const tokensB = extractTokens(b)
 
-  return tokensA.some((ta) => tokensB.some((tb) => ta === tb))
+  if (tokensA.length === 0 || tokensB.length === 0) return false
+
+  const [smaller, larger] =
+    tokensA.length <= tokensB.length ? [tokensA, new Set(tokensB)] : [tokensB, new Set(tokensA)]
+
+  return smaller.every((t) => larger.has(t))
 }
