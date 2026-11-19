@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.company_resolver import resolve_company
 from app.core.pagination import PaginationParams
+from app.core.websocket import ws_manager
 from app.core.dependencies import (
     AuthenticatedUser,
     BusinessReader,
@@ -112,7 +113,9 @@ def create_bill(
     db: Session = Depends(get_db),
 ):
     check_company_access(user, bill_in.company_id)
-    return BillsService(db).create_bill(bill_in)
+    created = BillsService(db).create_bill(bill_in)
+    ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"action": "created", "bill_id": getattr(created, "bill_id", None)}})
+    return created
 
 
 @router.get("/stats", response_model=BillStatsOut, summary="Get aggregated bill statistics")
@@ -164,7 +167,9 @@ def update_bill(
     check_company_access(user, existing.company_id)
     if bill_in.company_id is not None:
         check_company_access(user, bill_in.company_id)
-    return service.update_bill(bill_id, bill_in)
+    updated = service.update_bill(bill_id, bill_in)
+    ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"action": "updated", "bill_id": bill_id}})
+    return updated
 
 
 @router.delete("/{bill_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete a company bill")
@@ -177,6 +182,7 @@ def delete_bill(
     existing = service.get_bill(bill_id)
     check_company_access(user, existing.company_id)
     service.delete_bill(bill_id)
+    ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"action": "deleted", "bill_id": bill_id}})
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -203,7 +209,9 @@ def record_bill_payment(
     service = BillsService(db)
     bill = service.get_bill(bill_id)
     check_company_access(user, bill.company_id)
-    return service.record_payment(bill_id, payment_in)
+    result = service.record_payment(bill_id, payment_in)
+    ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"action": "payment_recorded", "bill_id": bill_id}})
+    return result
 
 
 @router.delete("/{bill_id}/payments/{payment_id}", response_model=BillOut, summary="Remove a bill payment")
@@ -216,7 +224,9 @@ def delete_bill_payment(
     service = BillsService(db)
     bill = service.get_bill(bill_id)
     check_company_access(user, bill.company_id)
-    return service.delete_payment(bill_id, payment_id)
+    result = service.delete_payment(bill_id, payment_id)
+    ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"action": "payment_deleted", "bill_id": bill_id}})
+    return result
 
 
 @router.delete("/{bill_id}/latest-payment", response_model=BillOut, summary="Undo the latest bill payment")
@@ -228,7 +238,9 @@ def delete_latest_bill_payment(
     service = BillsService(db)
     bill = service.get_bill(bill_id)
     check_company_access(user, bill.company_id)
-    return service.delete_latest_payment(bill_id)
+    result = service.delete_latest_payment(bill_id)
+    ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"action": "latest_payment_deleted", "bill_id": bill_id}})
+    return result
 
 
 @router.patch("/{bill_id}/audit", summary="Save the audit review of a bill (Auditor only)")

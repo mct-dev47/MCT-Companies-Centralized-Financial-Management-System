@@ -171,6 +171,13 @@ class ConnectionManager:
 
     def broadcast_sync(self, message: dict[str, Any]) -> None:
         """Thread-safe and synchronous-friendly broadcast caller."""
+        event_type = str(message.get("type") or "")
+        if event_type and event_type not in {"NOTIFICATION_RECEIVED", "ACTIVITY_LOG_CREATED"}:
+            try:
+                from app.core.cache import system_cache
+                system_cache.invalidate_tag("dashboard")
+            except Exception:
+                pass
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(self.broadcast(message))

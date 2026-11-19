@@ -1798,6 +1798,37 @@ export const TransactionPage: React.FC = () => {
     setDayAudit({ action, date, targets })
   }
 
+  const renderDayAuditActions = (date: string, dayTxs: DashboardTransactionItem[]) => {
+    if (!canAudit) return null
+    const pendingCount = getDayAuditTargets(dayTxs).length
+    if (pendingCount === 0) return null
+    return (
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => openDayAudit('Verified', date, dayTxs)}
+          title={`Mark ${pendingCount} pending record(s) on ${date} as audited`}
+          className="h-7 px-2.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold shadow-xs inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+        >
+          <CheckCircle2 className="w-3 h-3 shrink-0" />
+          <span>Mark as Audited ({pendingCount})</span>
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => openDayAudit('Flagged', date, dayTxs)}
+          title={`Flag ${pendingCount} pending record(s) on ${date} as a discrepancy`}
+          className="h-7 px-2.5 rounded-md border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-[11px] font-semibold shadow-xs inline-flex items-center gap-1 cursor-pointer whitespace-nowrap"
+        >
+          <AlertCircle className="w-3 h-3 shrink-0" />
+          <span>Flag Discrepancy</span>
+        </Button>
+      </div>
+    )
+  }
+
   const handleConfirmDayAudit = async () => {
     if (!dayAudit) return
     const { action, targets } = dayAudit
@@ -2402,38 +2433,8 @@ export const TransactionPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Day audit actions (Audit, By Day with a focused day) + All Records / By Day toggle */}
+            {/* All Records / By Day toggle */}
             <div className="shrink-0 flex flex-wrap items-center gap-2">
-              {canAudit && salesViewMode === 'daily_summary' && hasFocusedDay && (() => {
-                const focusedTxs = visibleDayGroups.flatMap((g) => g.banks.flatMap((b) => b.transactions))
-                const focusedDate = visibleDayGroups.map((g) => g.date).join(', ')
-                const pendingCount = getDayAuditTargets(focusedTxs).length
-                // Nothing left to audit on this day: hide the buttons instead of showing them disabled
-                if (pendingCount === 0) return null
-                return (
-                  <>
-                    <Button
-                      type="button"
-                      onClick={() => openDayAudit('Verified', focusedDate, focusedTxs)}
-                      title={`Mark ${pendingCount} pending record(s) on ${focusedDate} as audited`}
-                      className="min-h-[44px] h-11 px-4 rounded-[10px] bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <CheckCircle2 className="w-4 h-4 shrink-0" />
-                      <span>Mark as Audited{pendingCount > 0 ? ` (${pendingCount})` : ''}</span>
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => openDayAudit('Flagged', focusedDate, focusedTxs)}
-                      title={`Flag ${pendingCount} pending record(s) on ${focusedDate} as a discrepancy`}
-                      className="min-h-[44px] h-11 px-4 rounded-[10px] border border-rose-300 bg-white hover:bg-rose-50 text-rose-700 text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <AlertCircle className="w-4 h-4 shrink-0" />
-                      <span>Flag Discrepancy</span>
-                    </Button>
-                  </>
-                )
-              })()}
               {viewModeToggle}
             </div>
           </div>
@@ -2698,6 +2699,10 @@ export const TransactionPage: React.FC = () => {
 
                                   {/* Transactions table on this day */}
                                   <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
+                                    <div className="px-3.5 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-focus">
+                                      <span>Transactions on {dateFormatted}</span>
+                                      {renderDayAuditActions(group.date, dayTxs)}
+                                    </div>
                                     <table className="w-full text-left text-xs table-fixed">
                                       <colgroup>
                                         {showActionColumn ? (
@@ -3034,6 +3039,7 @@ export const TransactionPage: React.FC = () => {
                                   <span>
                                     Transactions on {group.date}{group.company ? ` · ${group.company}` : ''}
                                   </span>
+                                  {renderDayAuditActions(group.date, dayTxs)}
                                 </div>
                                 <table className="w-full min-w-[860px] lg:min-w-0 table-fixed text-left text-xs">
                                   <colgroup>
