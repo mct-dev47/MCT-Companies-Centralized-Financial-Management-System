@@ -26,6 +26,10 @@ class Loan(Base):
     audit_reviewed_by = Column(String(100), nullable=True)
     audit_reviewed_at = Column(DateTime(timezone=True), nullable=True)
     audit_remark = Column(Text, nullable=True)
+    audit_status = Column(String(20), nullable=False, default="Pending Audit", server_default="Pending Audit")
+    audited_by = Column(String(100), nullable=True)
+    audited_at = Column(DateTime(timezone=True), nullable=True)
+    audit_remarks = Column(Text, nullable=True)
     # Finance releases the money after Audit approves (spec 0046): Approved -> Disbursed
     disbursed_by = Column(String(100), nullable=True)
     disbursed_at = Column(DateTime(timezone=True), nullable=True)
@@ -87,6 +91,10 @@ class LoanRepayment(Base):
     notes = Column(Text, nullable=True)
     expense_id = Column(Integer, ForeignKey("expenses.expense_id", ondelete="SET NULL"), nullable=True, index=True)
     bank_account_id = Column(String(100), nullable=True)
+    audit_status = Column(String(20), nullable=False, default="Pending Audit", server_default="Pending Audit")
+    audited_by = Column(String(100), nullable=True)
+    audited_at = Column(DateTime(timezone=True), nullable=True)
+    audit_remarks = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

@@ -797,6 +797,36 @@ def _run_postgresql_migrations(conn) -> list[str]:
             applied.append("0076_bank_transactions_receivable_payment_link")
             logger.info("Migration 0076_bank_transactions_receivable_payment_link applied successfully.")
 
+    # 43. 0077: add bidirectional audit fields to bills, receivables, loan, loans_repayments, petty_cash_topups
+    result_0077 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0077_audit_fields_financial_tables'")
+    ).first()
+    if not result_0077:
+        script_0077 = MIGRATIONS_DIR / "0077_audit_fields_financial_tables.postgres.sql"
+        if script_0077.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0077.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0077_audit_fields_financial_tables')"))
+            applied.append("0077_audit_fields_financial_tables")
+            logger.info("Migration 0077_audit_fields_financial_tables applied successfully.")
+
+    # 44. 0078: link bank_transactions rows to loans and petty_cash_topups
+    result_0078 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0078_bank_transactions_loan_topup_links'")
+    ).first()
+    if not result_0078:
+        script_0078 = MIGRATIONS_DIR / "0078_bank_transactions_loan_topup_links.postgres.sql"
+        if script_0078.exists():
+            with conn.begin_nested():
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                for stmt in _sql_statements(script_0078.read_text(encoding="utf-8")):
+                    conn.execute(text(stmt))
+                conn.execute(text("INSERT INTO schema_migrations (version) VALUES ('0078_bank_transactions_loan_topup_links')"))
+            applied.append("0078_bank_transactions_loan_topup_links")
+            logger.info("Migration 0078_bank_transactions_loan_topup_links applied successfully.")
+
     conn.commit()
     return applied
 
@@ -1909,6 +1939,48 @@ def _run_sqlite_migrations(conn) -> list[str]:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_receivable_payment_id ON bank_transactions (source_receivable_payment_id)"))
         conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0076_bank_transactions_receivable_payment_link')"))
         applied.append("0076_bank_transactions_receivable_payment_link")
+
+    # 42. 0077: add bidirectional audit fields to bills, receivables, loan, loans_repayments, petty_cash_topups
+    result_0077 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0077_audit_fields_financial_tables'")
+    ).first()
+    if not result_0077:
+        tables = {
+            row[0].lower()
+            for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()
+        }
+        for tbl in ("bills", "receivables", "loan", "loans_repayments", "petty_cash_topups"):
+            if tbl in tables:
+                t_cols = {row[1] for row in conn.execute(text(f"PRAGMA table_info({tbl})")).fetchall()}
+                if "audit_status" not in t_cols:
+                    conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN audit_status VARCHAR(20) NOT NULL DEFAULT 'Pending Audit'"))
+                if "audited_by" not in t_cols:
+                    conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN audited_by VARCHAR(100)"))
+                if "audited_at" not in t_cols:
+                    conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN audited_at TIMESTAMP"))
+                if "audit_remarks" not in t_cols:
+                    conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN audit_remarks TEXT"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0077_audit_fields_financial_tables')"))
+        applied.append("0077_audit_fields_financial_tables")
+
+    # 43. 0078: link bank_transactions rows to loans and petty_cash_topups
+    result_0078 = conn.execute(
+        text("SELECT 1 FROM schema_migrations WHERE version = '0078_bank_transactions_loan_topup_links'")
+    ).first()
+    if not result_0078:
+        tx_exists = conn.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='bank_transactions'")
+        ).first()
+        if tx_exists:
+            bt_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(bank_transactions)")).fetchall()}
+            if "source_loan_id" not in bt_cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_loan_id INTEGER"))
+            if "source_topup_id" not in bt_cols:
+                conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_topup_id INTEGER"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_loan_id ON bank_transactions (source_loan_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_topup_id ON bank_transactions (source_topup_id)"))
+        conn.execute(text("INSERT OR IGNORE INTO schema_migrations (version) VALUES ('0078_bank_transactions_loan_topup_links')"))
+        applied.append("0078_bank_transactions_loan_topup_links")
 
     conn.commit()
     return applied

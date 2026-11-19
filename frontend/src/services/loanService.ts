@@ -1,6 +1,7 @@
 import type { DashboardTransactionItem } from './dashboardService'
 import { websocketService } from './websocketService'
 import { notifyNotificationsUpdated } from './notificationService'
+import { saveAuditReview as saveSharedAuditReview } from './auditReviewApi'
 
 export interface LoanRepaymentRecord {
   id: string
@@ -220,17 +221,17 @@ function mapBackendLoanToItem(l: any): LoanItem {
     auditRemark: l.audit_remark,
     disbursedBy: l.disbursed_by || undefined,
     disbursedAt: l.disbursed_at || undefined,
-    // Audit's approval is the audit (spec 0014, AC-8). Every status after approval counts as audited.
-    auditStatus: AUDITED_LOAN_STATUSES.has((l.status || '').trim().toLowerCase()) ? 'Verified' : 'Pending Audit',
-    auditedBy: l.audit_reviewed_by || undefined,
+    auditStatus:
+      l.audit_status === 'Verified' || l.audit_status === 'Flagged'
+        ? l.audit_status
+        : 'Pending Audit',
+    auditedBy: l.audited_by || l.audit_reviewed_by || undefined,
+    auditDate: l.audited_at || undefined,
     type: 'Loan',
     createdAt: l.created_at || new Date().toISOString(),
     updatedAt: l.updated_at || new Date().toISOString(),
   }
 }
-
-/** Loan statuses reached only after Internal Audit approved the loan. */
-const AUDITED_LOAN_STATUSES = new Set(['approved', 'disbursed', 'paid', 'partially paid', 'overdue'])
 
 const loanCache = new Map<string, { data: any; timestamp: number }>()
 const LOAN_CACHE_TTL = 30000
@@ -887,6 +888,26 @@ export const loanService = {
     inMemoryLoans = inMemoryLoans.map((l) => (l.id === id || l.id === `loan_${numericId}` ? mapped : l))
     saveStoredLoans(inMemoryLoans)
     return mapped
+  },
+
+  async saveAuditReview(
+    loanId: string,
+    status: 'Verified' | 'Flagged' | 'Pending Audit',
+    remarks?: string
+  ): Promise<void> {
+    const numericId = String(loanId).replace(/^loan_/, '').split(':')[0]
+    await saveSharedAuditReview('loans', numericId, status, remarks)
+    loanCache.clear()
+  },
+
+  async saveRepaymentAuditReview(
+    repaymentId: string,
+    status: 'Verified' | 'Flagged' | 'Pending Audit',
+    remarks?: string
+  ): Promise<void> {
+    const numericId = String(repaymentId).replace(/^loan_rep_/, '').split(':')[0]
+    await saveSharedAuditReview('loans/repayments', numericId, status, remarks)
+    loanCache.clear()
   },
 
   async approveLoan(

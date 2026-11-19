@@ -695,3 +695,33 @@ def delete_category(
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+
+@router.patch("/topups/{topup_id}/audit", response_model=PettyCashTopUpOut, summary="Save the audit review of a petty cash top-up (Auditor only)")
+def review_petty_cash_topup_audit(
+    topup_id: int,
+    review_in: dict,
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
+    db: Session = Depends(get_db),
+):
+    from app.models.petty_cash import PettyCashTopUp
+    from app.schemas.audit_review import AuditReviewIn
+    from app.services.audit_review_service import apply_audit_review
+    from app.core.cache import system_cache
+    from app.core.websocket import ws_manager
+
+    payload = AuditReviewIn(**review_in)
+    apply_audit_review(
+        db,
+        current_user,
+        model=PettyCashTopUp,
+        pk_column="topup_id",
+        supabase_table="petty_cash_topups",
+        record_id=topup_id,
+        payload=payload,
+        not_found="Petty cash top-up not found",
+    )
+    system_cache.invalidate_tag("petty_cash")
+    ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED", "payload": {"action": "audited", "topup_id": topup_id}})
+    topup = db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
+    return topup
+

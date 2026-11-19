@@ -74,6 +74,10 @@ class BankTransaction(Base):
     source_loan_repayment_id = Column(Integer, nullable=True, index=True)
     # Links a bank entry to a ReceivablePayment so each installment keeps its own bank row.
     source_receivable_payment_id = Column(Integer, nullable=True, index=True)
+    # Links a bank entry (lender withdrawal or borrower deposit) to a Loan disbursement.
+    source_loan_id = Column(Integer, nullable=True, index=True)
+    # Links a bank entry to a PettyCashTopUp.
+    source_topup_id = Column(Integer, nullable=True, index=True)
     # 'manual' = typed directly in Bank Management (no sale/expense/loan/petty-cash record behind it).
     # Part of the table (so create_all / new databases get it) but NOT mapped by the ORM (see __mapper_args__):
     # the ORM never names it in an INSERT or SELECT, so bank reads and writes keep working on a database where

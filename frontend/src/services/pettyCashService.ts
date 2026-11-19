@@ -5,6 +5,7 @@
 
 import { websocketService } from './websocketService'
 import { notifyNotificationsUpdated } from './notificationService'
+import { saveAuditReview as saveSharedAuditReview } from './auditReviewApi'
 
 export const PETTY_CASH_METHOD = 'Petty Cash'
 
@@ -974,5 +975,15 @@ export const pettyCashService = {
     })
     if (!response.ok) throw await getBackendError(response)
     return await response.json()
+  },
+
+  async saveTopupAuditReview(
+    topupId: string,
+    status: 'Verified' | 'Flagged' | 'Pending Audit',
+    remarks?: string
+  ): Promise<void> {
+    const numericId = String(topupId).replace(/^petty_/, '').split(':')[0]
+    await saveSharedAuditReview('petty-cash/topups', numericId, status, remarks)
+    this.invalidateCache({ notifyBell: false })
   },
 }

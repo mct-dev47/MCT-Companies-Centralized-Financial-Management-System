@@ -2045,7 +2045,7 @@ class PettyCashService:
                 category="Bank Transfer" if topup.payment_method_option == "direct" else "Cheque",
                 reference_no=None,
             )
-            _, tx = bank_svc.withdraw(bank_acc.id, withdraw_req)
+            _, tx = bank_svc.withdraw(bank_acc.id, withdraw_req, source_topup_id=topup.topup_id)
             ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": bank_acc.id}})
 
         # 2. Method A (Direct Payment): record intercompany transfer
@@ -2565,7 +2565,7 @@ class PettyCashService:
                     category="Bank Transfer",
                     reference_no=None,
                 )
-                bank_svc.withdraw(funding_acc.id, withdraw_req)
+                bank_svc.withdraw(funding_acc.id, withdraw_req, source_topup_id=topup.topup_id)
                 ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": funding_acc.id}})
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=f"Bank withdrawal for petty cash failed: {exc}")
@@ -2580,7 +2580,7 @@ class PettyCashService:
                 category="Bank Transfer",
                 reference_no=None,
             )
-            bank_svc.withdraw(funding_acc.id, withdraw_req)
+            bank_svc.withdraw(funding_acc.id, withdraw_req, source_topup_id=topup.topup_id)
             ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": funding_acc.id}})
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Bank withdrawal for petty cash failed: {exc}")
@@ -2598,7 +2598,7 @@ class PettyCashService:
                     category="Bank Transfer",
                     reference_no=None,
                 )
-                bank_svc.deposit(dest_acc.id, deposit_req)
+                bank_svc.deposit(dest_acc.id, deposit_req, source_topup_id=topup.topup_id)
                 ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"account_id": dest_acc.id}})
             except Exception as exc:
                 raise HTTPException(status_code=400, detail=f"Bank deposit for petty cash failed: {exc}")

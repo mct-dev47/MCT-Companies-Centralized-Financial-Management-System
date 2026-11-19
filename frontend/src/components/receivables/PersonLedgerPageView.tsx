@@ -27,6 +27,9 @@ import { formatPHP } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { formatToYYYYMMDD } from '@/utils/dateUtils'
 import { bankService, isAccountOwnedBy, type BankAccount, preferSoleOwnedBanks } from '@/services/bankService'
+import { receivablesService } from '@/services/receivablesService'
+import { receivablesStore } from '@/services/receivablesStore'
+import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 import type {
   CustomerType,
   PaymentStatus,
@@ -620,7 +623,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Method</th>
                           <th className="py-2.5 px-3.5 text-left whitespace-nowrap">Receipt / Ref No.</th>
                           <th className="py-2.5 px-3.5 text-left">Remarks</th>
-                          {canMutate && (
+                          {(canMutate || isAudit) && (
                             <th className="py-2.5 px-3.5 text-center whitespace-nowrap">Actions</th>
                           )}
                         </tr>
@@ -628,7 +631,7 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                       <tbody className="divide-y divide-slate-100">
                         {paginatedPayments.length === 0 ? (
                           <tr>
-                            <td colSpan={canMutate ? 8 : 7} className="py-12 text-center text-muted-fg text-xs">
+                            <td colSpan={canMutate || isAudit ? 8 : 7} className="py-12 text-center text-muted-fg text-xs">
                               No payment records matching &quot;{detailSearchQuery}&quot;
                             </td>
                           </tr>
@@ -650,10 +653,22 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                                   {pay.date}
                                 </td>
                                 <td className="py-2.5 px-3.5 whitespace-nowrap">
-                                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                    <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                    <span>Paid</span>
-                                  </span>
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                      <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                      <span>Paid</span>
+                                    </span>
+                                    {(linkedSale?.auditStatus === 'Verified' || paymentLocked) && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                        Audited
+                                      </span>
+                                    )}
+                                    {linkedSale?.auditStatus === 'Flagged' && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                        Discrepancy
+                                      </span>
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="py-2.5 px-3.5 font-bold text-emerald-600 whitespace-nowrap tabular-nums">
                                   {formatPHP(pay.amount)}
@@ -667,23 +682,60 @@ export const PersonLedgerPageView: React.FC<PersonLedgerPageViewProps> = ({
                                 <td className="py-2.5 px-3.5 text-muted-fg truncate max-w-[200px]" title={pay.notes || '—'}>
                                   {pay.notes || 'Payment remittance'}
                                 </td>
-                                {canMutate && (
+                                {(canMutate || isAudit) && (
                                   <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
-                                    <div className="inline-flex items-center justify-center">
-                                      <RowActionsMenu
-                                        canDelete={!paymentLocked && Boolean(onDeletePayment)}
-                                        onDelete={() => setConfirmDeletePaymentId(pay.id)}
-                                        deleteLabel="Reverse Payment"
-                                        customItems={
-                                          paymentLocked ? (
-                                            <div className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-emerald-700">
-                                              <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                              <span>Locked (Audited)</span>
-                                            </div>
-                                          ) : undefined
-                                        }
-                                      />
-                                    </div>
+                                    {isAudit ? (
+                                      <div className="inline-flex items-center justify-center gap-1">
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              await receivablesService.savePaymentAuditReview(pay.id, 'Verified')
+                                              await receivablesStore.refreshFromBackend()
+                                            } catch (err) {
+                                              reportAuditSaveFailure(err)
+                                            }
+                                          }}
+                                          className="px-2 py-1 rounded-md text-[11px] font-semibold bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 cursor-pointer"
+                                          title="Mark as Audited"
+                                        >
+                                          {linkedSale?.auditStatus === 'Verified' ? 'Audited' : 'Mark Audited'}
+                                        </button>
+                                        {linkedSale?.auditStatus !== 'Flagged' && (
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              try {
+                                                await receivablesService.savePaymentAuditReview(pay.id, 'Flagged')
+                                                await receivablesStore.refreshFromBackend()
+                                              } catch (err) {
+                                                reportAuditSaveFailure(err)
+                                              }
+                                            }}
+                                            className="px-2 py-1 rounded-md text-[11px] font-semibold bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200 cursor-pointer"
+                                            title="Flag Discrepancy"
+                                          >
+                                            Flag
+                                          </button>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <div className="inline-flex items-center justify-center">
+                                        <RowActionsMenu
+                                          canDelete={!paymentLocked && Boolean(onDeletePayment)}
+                                          onDelete={() => setConfirmDeletePaymentId(pay.id)}
+                                          deleteLabel="Reverse Payment"
+                                          customItems={
+                                            paymentLocked ? (
+                                              <div className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-emerald-700">
+                                                <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                                <span>Locked (Audited)</span>
+                                              </div>
+                                            ) : undefined
+                                          }
+                                        />
+                                      </div>
+                                    )}
                                   </td>
                                 )}
                               </tr>

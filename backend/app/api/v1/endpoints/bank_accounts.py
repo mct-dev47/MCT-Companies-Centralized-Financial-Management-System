@@ -349,8 +349,7 @@ def review_bank_transaction_audit(
     db: Session = Depends(get_db),
 ):
     from app.models.bank import BankTransaction, BankAccount
-    from app.models.finance import Expense, Sale
-    from app.services.audit_review_service import _auditor_name, apply_audit_review
+    from app.services.audit_review_service import _auditor_name, propagate_audit_status
     from app.services.audit_service import AuditAction, log_transaction
     from datetime import datetime, timezone
 
@@ -377,39 +376,19 @@ def review_bank_transaction_audit(
         tx.audited_at = now_utc
         tx.audit_remarks = target_remarks
 
-    # If linked to expense, update the expense's audit review as well
-    if tx.source_expense_id:
-        try:
-            apply_audit_review(
-                db, current_user,
-                model=Expense, pk_column="expense_id", supabase_table="expenses",
-                record_id=tx.source_expense_id, payload=review_in, not_found="Expense not found",
-            )
-        except Exception:
-            exp = db.query(Expense).filter(Expense.expense_id == tx.source_expense_id).first()
-            if exp:
-                exp.audit_status = tx.audit_status
-                exp.audited_by = tx.audited_by
-                exp.audited_at = tx.audited_at
-                exp.audit_remarks = tx.audit_remarks
-
-    # If linked to sale, update the sale's audit review as well
-    if tx.source_sale_id:
-        try:
-            apply_audit_review(
-                db, current_user,
-                model=Sale, pk_column="sales_id", supabase_table="sales",
-                record_id=tx.source_sale_id, payload=review_in, not_found="Sale not found",
-            )
-        except Exception:
-            s = db.query(Sale).filter(Sale.sales_id == tx.source_sale_id).first()
-            if s:
-                s.audit_status = tx.audit_status
-                s.audited_by = tx.audited_by
-                s.audited_at = tx.audited_at
-                s.audit_remarks = tx.audit_remarks
-
     db.commit()
+    db.refresh(tx)
+
+    # Propagate audit review to all linked domain records (Sales, Expenses, Bills, Receivables, Loans, Lending, Tenants, Petty Cash)
+    propagate_audit_status(
+        db,
+        source_type="bank_transactions",
+        source_id=transaction_id,
+        status=tx.audit_status,
+        audited_by=tx.audited_by,
+        audited_at=tx.audited_at,
+        audit_remarks=tx.audit_remarks,
+    )
     db.refresh(tx)
 
     log_transaction(

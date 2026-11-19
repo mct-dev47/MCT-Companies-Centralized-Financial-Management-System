@@ -65,7 +65,6 @@ import { salesService } from '@/services/salesService'
 import { expenseService } from '@/services/expenseService'
 import { loanService } from '@/services/loanService'
 import { pettyCashService } from '@/services/pettyCashService'
-import { tenantService } from '@/services/tenantService'
 import { bankService, isAccountOwnedBy, isSharedAccount, type BankAccount, type BankTransaction } from '@/services/bankService'
 import { transactionService } from '@/services/transactionService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
@@ -74,7 +73,7 @@ import { useCompany } from '@/context/CompanyContext'
 import { isCompanyMatch } from '@/utils/companyUtils'
 import { formatPHP } from '@/lib/format'
 import { isDateInRange, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
-import { reportAuditSaveFailure } from '@/services/auditReviewApi'
+import { reportAuditSaveFailure, saveTransactionAuditReview } from '@/services/auditReviewApi'
 import { notifyError, notifyWarning, notifySuccess } from '@/utils/errorUtils'
 import { websocketService } from '@/services/websocketService'
 import { escapeHtml, csvCell } from '@/utils/exportSafety'
@@ -1762,26 +1761,14 @@ export const TransactionPage: React.FC = () => {
     setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
 
     try {
-      if (tx.id.startsWith('tx-') || tx.type === 'Bank') {
-        const res = await bankService.updateTransactionAuditStatus(tx.id, 'Verified', trimmedNotes)
+      const res = await saveTransactionAuditReview(tx, 'Verified', trimmedNotes)
+      if ((tx.id.startsWith('tx-') || tx.type === 'Bank') && res) {
         const finalTx: DashboardTransactionItem = {
           ...updatedTx,
-          auditedBy: res.auditedBy || auditorName,
-          auditDate: res.auditDate || today,
+          auditedBy: res.audited_by || res.auditedBy || auditorName,
+          auditDate: res.audited_at || res.auditDate || today,
         }
         setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? finalTx : t)))
-      } else if (tx.type === 'Sales') {
-        await salesService.updateSaleAuditStatus(tx.id, 'Verified', auditorName, trimmedNotes)
-      } else if (tx.type === 'Expense') {
-        await expenseService.updateExpenseAuditStatus(tx.id, 'Verified', auditorName, trimmedNotes)
-      } else if (tx.type === 'Loan') {
-        setIsMarkAuditModalOpen(false)
-        setMarkAuditRemarks('')
-        setMarkAuditTargetTx(null)
-        return
-      } else if (tx.type === 'Income') {
-        const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-        await tenantService.saveAuditReview(leaseId, 'Verified', trimmedNotes)
       }
       setIsMarkAuditModalOpen(false)
       setMarkAuditRemarks('')
@@ -1794,9 +1781,8 @@ export const TransactionPage: React.FC = () => {
     }
   }
 
-  // Sales and Expense rows the auditor can review here (petty cash and loans are handled on their own workflows)
-  const isRowAuditable = (tx: DashboardTransactionItem) =>
-    tx.type !== 'Petty Cash' && tx.type !== 'Loan' && !tx.awaitingAudit
+  // All non-pending-approval rows are auditable directly from Transactions
+  const isRowAuditable = (tx: DashboardTransactionItem) => !tx.awaitingAudit
 
   // Audit a whole day in one go: every auditable row that is not already audited or flagged.
   // Flagged rows keep their discrepancy and must be re-audited by hand.
@@ -1831,19 +1817,7 @@ export const TransactionPage: React.FC = () => {
     )
 
     const results = await Promise.allSettled(
-      targets.map((tx) => {
-        if (tx.id.startsWith('tx-') || tx.type === 'Bank') {
-          return bankService.updateTransactionAuditStatus(tx.id, action, notes)
-        }
-        if (tx.type === 'Sales') return salesService.updateSaleAuditStatus(tx.id, action, auditorName, notes)
-        if (tx.type === 'Expense') return expenseService.updateExpenseAuditStatus(tx.id, action, auditorName, notes)
-        if (tx.type === 'Loan') return Promise.resolve()
-        if (tx.type === 'Income') {
-          const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-          return tenantService.saveAuditReview(leaseId, action, notes)
-        }
-        return Promise.resolve()
-      })
+      targets.map((tx) => saveTransactionAuditReview(tx, action, notes))
     )
     setIsSubmittingDayAudit(false)
     setDayAudit(null)
@@ -1882,21 +1856,14 @@ export const TransactionPage: React.FC = () => {
     setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? updatedTx : t)))
 
     try {
-      if (tx.id.startsWith('tx-') || tx.type === 'Bank') {
-        const res = await bankService.updateTransactionAuditStatus(tx.id, 'Flagged', trimmed)
+      const res = await saveTransactionAuditReview(tx, 'Flagged', trimmed)
+      if ((tx.id.startsWith('tx-') || tx.type === 'Bank') && res) {
         const finalTx: DashboardTransactionItem = {
           ...updatedTx,
-          auditedBy: res.auditedBy || auditorName,
-          auditDate: res.auditDate || today,
+          auditedBy: res.audited_by || res.auditedBy || auditorName,
+          auditDate: res.audited_at || res.auditDate || today,
         }
         setTransactions((prev) => prev.map((t) => (t.id === tx.id && t.type === tx.type ? finalTx : t)))
-      } else if (tx.type === 'Sales') {
-        await salesService.updateSaleAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
-      } else if (tx.type === 'Expense') {
-        await expenseService.updateExpenseAuditStatus(tx.id, 'Flagged', auditorName, trimmed)
-      } else if (tx.type === 'Income') {
-        const leaseId = tx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-        await tenantService.saveAuditReview(leaseId, 'Flagged', trimmed)
       }
       setIsDiscrepancyModalOpen(false)
       setDiscrepancyReason('')

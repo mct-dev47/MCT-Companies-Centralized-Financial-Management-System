@@ -1512,6 +1512,16 @@ class LendingService:
             pass
 
         system_cache.invalidate_tag("notifications")
+        from app.services.audit_review_service import propagate_audit_status
+        propagate_audit_status(
+            db,
+            source_type="lending",
+            source_id=borrower_id,
+            status=b.audit_status,
+            audited_by=b.audited_by,
+            audited_at=b.audited_at,
+            audit_remarks=b.audit_remarks,
+        )
         return cls.get_borrower(db=db, borrower_id=borrower_id)
 
     @classmethod
@@ -1614,6 +1624,16 @@ class LendingService:
             pass
 
         system_cache.invalidate_tag("notifications")
+        from app.services.audit_review_service import propagate_audit_status
+        propagate_audit_status(
+            db,
+            source_type="lending",
+            source_id=borrower_id,
+            status=b.audit_status,
+            audited_by=b.audited_by,
+            audited_at=b.audited_at,
+            audit_remarks=b.audit_remarks,
+        )
         return cls.get_borrower(db=db, borrower_id=borrower_id)
 
     @hybrid_method

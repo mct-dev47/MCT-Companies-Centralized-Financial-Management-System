@@ -908,4 +908,20 @@ class TenantService:
             }
         row = self._run("update_lease", lease["lease_id"], data)
         system_cache.invalidate_tag("notifications")
+        from app.services.audit_review_service import propagate_audit_status
+        audited_at_dt = None
+        if data.get("audited_at"):
+            try:
+                audited_at_dt = datetime.fromisoformat(data["audited_at"])
+            except Exception:
+                audited_at_dt = datetime.now(timezone.utc)
+        propagate_audit_status(
+            self.db,
+            source_type="tenants",
+            source_id=lease["lease_id"],
+            status=data["audit_status"],
+            audited_by=data.get("audited_by"),
+            audited_at=audited_at_dt,
+            audit_remarks=data.get("audit_remarks"),
+        )
         return self.to_out(row)

@@ -291,9 +291,21 @@ export function deriveTransactionLifecycle(
               ? 'On hold'
               : 'Payment pending'
 
-    const label = isAuditFlagged ? `${baseLabel} · Flagged` : baseLabel
-    const tone: TransactionLifecycleInfo['tone'] =
-      paidStepState === 'problem' || isAuditFlagged ? 'problem' : 'waiting'
+    const label = isAuditVerified
+      ? `${baseLabel} · Audited`
+      : isAuditFlagged
+        ? `${baseLabel} · Flagged`
+        : baseLabel
+    const shortStatusLabel = isAuditVerified
+      ? 'Audited'
+      : isAuditFlagged
+        ? 'Flagged'
+        : baseLabel
+    const tone: TransactionLifecycleInfo['tone'] = isAuditVerified
+      ? 'done'
+      : paidStepState === 'problem' || isAuditFlagged
+        ? 'problem'
+        : 'waiting'
 
     return {
       bucket: 'unpaid',
@@ -309,7 +321,7 @@ export function deriveTransactionLifecycle(
         { key: 'audited', title: 'Audited', state: auditedStepState },
       ],
       label,
-      shortStatusLabel: label,
+      shortStatusLabel,
       tone,
       primaryAction: { kind: 'record_payment', label: 'Record payment' },
       overdueDays: 0,
@@ -324,8 +336,16 @@ export function deriveTransactionLifecycle(
     const waitingShort =
       channelKind === 'transfer' ? 'Awaiting transfer' : 'Awaiting deposit'
     const waitingLabel = `Paid · ${waitingShort}`
-    const label = isAuditFlagged ? `${waitingLabel} · Flagged` : waitingLabel
-    const shortStatusLabel = isAuditFlagged ? `${waitingShort} · Flagged` : waitingShort
+    const label = isAuditVerified
+      ? `${waitingLabel} · Audited`
+      : isAuditFlagged
+        ? `${waitingLabel} · Flagged`
+        : waitingLabel
+    const shortStatusLabel = isAuditVerified
+      ? 'Audited'
+      : isAuditFlagged
+        ? 'Flagged'
+        : waitingShort
 
     const primaryAction: TransactionLifecycleInfo['primaryAction'] =
       channelKind === 'transfer'
@@ -357,7 +377,7 @@ export function deriveTransactionLifecycle(
       ],
       label,
       shortStatusLabel,
-      tone: isAuditFlagged ? 'problem' : 'waiting',
+      tone: isAuditVerified ? 'done' : isAuditFlagged ? 'problem' : 'waiting',
       primaryAction,
       overdueDays,
       overdueLabel,

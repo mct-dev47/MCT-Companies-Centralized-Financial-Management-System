@@ -50,6 +50,7 @@ import { LoanDetailPageView } from '@/components/dashboard/LoanDetailPageView'
 import { LoanHorizontalBarChart } from '@/components/dashboard/LoanHorizontalBarChart'
 import { AdminCompanyLoansView } from '@/components/dashboard/AdminCompanyLoansView'
 import { useSession } from '@/hooks/useSession'
+import { reportAuditSaveFailure } from '@/services/auditReviewApi'
 import { formatPHP } from '@/lib/format'
 import {
   loanService,
@@ -231,17 +232,14 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
       auditStatus: status,
       auditDate: timestamp,
       auditedBy: user?.fullName || 'Audit',
-      status: status === 'Verified' ? (loan.status === 'Pending Audit' ? 'Approved' : loan.status) : loan.status,
     }
     setLoans((prev) => prev.map((l) => (l.id === loan.id ? updatedLoan : l)))
     setViewLoanItem((prev) => (prev && prev.id === loan.id ? updatedLoan : prev))
     try {
-      await loanService.auditReviewLoan(loan.id, {
-        action: status === 'Verified' ? 'approve' : 'disapprove',
-        remark: status === 'Verified' ? 'Audited & Verified' : 'Discrepancy flagged by audit',
-      })
-    } catch {
-      // Fallback if endpoint is unavailable
+      await loanService.saveAuditReview(loan.id, status)
+    } catch (err) {
+      reportAuditSaveFailure(err)
+      void loadLoans()
     }
     setOpenMenuLoanId(null)
   }
@@ -376,12 +374,17 @@ export const LoanPage: React.FC<LoanPageProps> = ({ initialType = 'Borrower' }) 
 
   // Real-time synchronization across all tabs and clients
   React.useEffect(() => {
-    const unsubscribe = websocketService.subscribe('LOANS_UPDATED', () => {
+    const reload = () => {
       // Another user (for example Audit) changed a loan: drop the 30 second cache so the reload is real
       loanService.invalidateCache()
       loadLoans()
-    })
-    return () => unsubscribe()
+    }
+    const unsubscribeLoans = websocketService.subscribe('LOANS_UPDATED', reload)
+    const unsubscribeAudit = websocketService.subscribe('AUDIT_UPDATED', reload)
+    return () => {
+      unsubscribeLoans()
+      unsubscribeAudit()
+    }
   }, [loadLoans])
 
 

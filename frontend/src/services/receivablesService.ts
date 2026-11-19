@@ -1,4 +1,5 @@
 import { HttpError, NetworkError } from '@/lib/requestErrors'
+import { saveAuditReview as saveSharedAuditReview } from './auditReviewApi'
 
 export interface BackendReceivablePayment {
   payment_id: number
@@ -28,6 +29,10 @@ export interface BackendReceivable {
   balance: number
   payment_status: 'Unpaid' | 'Partial' | 'Paid'
   is_locked?: boolean
+  audit_status?: 'Verified' | 'Pending Audit' | 'Flagged'
+  audited_by?: string | null
+  audited_at?: string | null
+  audit_remarks?: string | null
   /** Bank every payment goes to: the sale's bank, else the first payment's bank */
   origin_bank_account_id?: string | null
   origin_bank_name?: string | null
@@ -355,5 +360,22 @@ export const receivablesService = {
       const err = await res.json().catch(() => ({}))
       throw new Error(err.detail || `Failed to delete payment: ${res.statusText}`)
     }
+  },
+
+  async saveAuditReview(
+    receivableId: string,
+    status: 'Verified' | 'Flagged' | 'Pending Audit',
+    remarks?: string
+  ): Promise<void> {
+    await saveSharedAuditReview('receivables', receivableId, status, remarks)
+  },
+
+  async savePaymentAuditReview(
+    paymentId: string,
+    status: 'Verified' | 'Flagged' | 'Pending Audit',
+    remarks?: string
+  ): Promise<void> {
+    const numericId = String(paymentId).replace(/^rec_pmt_/, '').split(':')[0]
+    await saveSharedAuditReview('receivables/payments', numericId, status, remarks)
   },
 }

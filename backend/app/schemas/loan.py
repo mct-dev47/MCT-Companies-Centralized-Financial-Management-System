@@ -102,6 +102,10 @@ class LoanOut(LoanBase):
     audit_reviewed_by: Optional[str] = None
     audit_reviewed_at: Optional[datetime] = None
     audit_remark: Optional[str] = None
+    audit_status: str = "Pending Audit"
+    audited_by: Optional[str] = None
+    audited_at: Optional[datetime] = None
+    audit_remarks: Optional[str] = None
     disbursed_by: Optional[str] = None
     disbursed_at: Optional[datetime] = None
     # The borrower's bank that received the money on disbursement (bank_account_id is the lender's).

@@ -165,6 +165,10 @@ class ReceivableOut(ReceivableBase):
     balance: Decimal
     payment_status: str
     is_locked: bool = False
+    audit_status: str = "Pending Audit"
+    audited_by: Optional[str] = None
+    audited_at: Optional[datetime] = None
+    audit_remarks: Optional[str] = None
     # Bank every payment on this receivable goes to (its sale's bank, else its first payment's bank)
     origin_bank_account_id: Optional[str] = None
     origin_bank_name: Optional[str] = None

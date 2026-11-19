@@ -12,10 +12,12 @@ from app.core.dependencies import (
     BusinessWriter,
     check_company_access,
     get_authorized_company_scope,
+    require_auditor_user,
     require_business_reader,
     require_business_writer,
 )
 from app.db.session import get_db
+from app.schemas.audit_review import AuditReviewIn
 from app.schemas.bills import (
     BillCreate,
     BillOut,
@@ -227,3 +229,35 @@ def delete_latest_bill_payment(
     bill = service.get_bill(bill_id)
     check_company_access(user, bill.company_id)
     return service.delete_latest_payment(bill_id)
+
+
+@router.patch("/{bill_id}/audit", summary="Save the audit review of a bill (Auditor only)")
+def review_bill_audit(
+    bill_id: int,
+    review_in: AuditReviewIn,
+    current_user: AuthenticatedUser = Depends(require_auditor_user),
+    db: Session = Depends(get_db),
+):
+    from app.models.bills import Bill
+    from app.services.audit_review_service import apply_audit_review
+    from app.core.websocket import ws_manager
+
+    apply_audit_review(
+        db,
+        current_user,
+        model=Bill,
+        pk_column="bill_id",
+        supabase_table="bills",
+        record_id=bill_id,
+        payload=review_in,
+        not_found="Bill not found",
+    )
+    ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"action": "audited", "bill_id": bill_id}})
+    bill = db.query(Bill).filter(Bill.bill_id == bill_id).first()
+    return {
+        "bill_id": bill_id,
+        "audit_status": getattr(bill, "audit_status", "Pending Audit") if bill else review_in.audit_status,
+        "audited_by": getattr(bill, "audited_by", None) if bill else None,
+        "audited_at": bill.audited_at.isoformat() if bill and getattr(bill, "audited_at", None) else None,
+        "audit_remarks": getattr(bill, "audit_remarks", None) if bill else None,
+    }

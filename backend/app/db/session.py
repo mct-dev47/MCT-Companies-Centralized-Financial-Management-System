@@ -404,6 +404,32 @@ def init_db():
                     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_loans_repayments_expense_id ON loans_repayments(expense_id)"))
                 except Exception:
                     pass
+
+        for tbl in ("bills", "receivables", "loan", "loans_repayments", "petty_cash_topups"):
+            if tbl in table_names:
+                t_cols = {col["name"] for col in inspector.get_columns(tbl)}
+                with engine.begin() as conn:
+                    if "audit_status" not in t_cols:
+                        conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN audit_status VARCHAR(20) NOT NULL DEFAULT 'Pending Audit'"))
+                    if "audited_by" not in t_cols:
+                        conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN audited_by VARCHAR(100)"))
+                    if "audited_at" not in t_cols:
+                        conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN audited_at TIMESTAMP WITH TIME ZONE"))
+                    if "audit_remarks" not in t_cols:
+                        conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN audit_remarks TEXT"))
+
+        if "bank_transactions" in table_names:
+            bt_cols = {col["name"] for col in inspector.get_columns("bank_transactions")}
+            with engine.begin() as conn:
+                if "source_loan_id" not in bt_cols:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_loan_id INTEGER"))
+                if "source_topup_id" not in bt_cols:
+                    conn.execute(text("ALTER TABLE bank_transactions ADD COLUMN source_topup_id INTEGER"))
+                try:
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_loan_id ON bank_transactions(source_loan_id)"))
+                    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bank_transactions_source_topup_id ON bank_transactions(source_topup_id)"))
+                except Exception:
+                    pass
     except Exception:
         pass
 

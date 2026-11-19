@@ -20,6 +20,7 @@ import {
   MessageSquare,
 } from 'lucide-react'
 import { UpdateLoanStatusModal } from './UpdateLoanStatusModal'
+import { saveTransactionAuditReview } from '@/services/auditReviewApi'
 import { parseParticulars } from '@/utils/particularsUtils'
 import {
   Dialog,
@@ -50,7 +51,6 @@ import {
   loanService,
   type LoanItem,
 } from '@/services/loanService'
-import { tenantService } from '@/services/tenantService'
 import { activityLogService, type EntityTimelineEvent } from '@/services/activityLogService'
 import type { DashboardTransactionItem } from '@/services/dashboardService'
 import { cn } from '@/lib/utils'
@@ -677,26 +677,17 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         }
         setCurrentTx(updated)
         try {
-          if (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') {
-            const res = await bankService.updateTransactionAuditStatus(activeTx.id, 'Verified', trimmedNotes)
-            const finalTx: DashboardTransactionItem = {
-              ...updated,
-              auditedBy: res.auditedBy || auditorName,
-              auditDate: res.auditDate || today,
-            }
-            setCurrentTx(finalTx)
-            if (onTransactionUpdated) onTransactionUpdated(finalTx)
-          } else if (activeTx.type === 'Sales') {
-            await salesService.updateSaleAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Expense') {
-            await expenseService.updateExpenseAuditStatus(activeTx.id, 'Verified', auditorName, trimmedNotes)
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Income') {
-            const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-            await tenantService.saveAuditReview(leaseId, 'Verified', trimmedNotes)
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          }
+          const res = await saveTransactionAuditReview(activeTx, 'Verified', trimmedNotes)
+          const finalTx: DashboardTransactionItem =
+            (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') && res
+              ? {
+                  ...updated,
+                  auditedBy: res.audited_by || res.auditedBy || auditorName,
+                  auditDate: res.audited_at || res.auditDate || today,
+                }
+              : updated
+          setCurrentTx(finalTx)
+          if (onTransactionUpdated) onTransactionUpdated(finalTx)
         } catch (err: any) {
           setCurrentTx(activeTx)
           throw err
@@ -754,26 +745,17 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         }
         setCurrentTx(updated)
         try {
-          if (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') {
-            const res = await bankService.updateTransactionAuditStatus(activeTx.id, 'Flagged', trimmedRemarks)
-            const finalTx: DashboardTransactionItem = {
-              ...updated,
-              auditedBy: res.auditedBy || auditorName,
-              auditDate: res.auditDate || today,
-            }
-            setCurrentTx(finalTx)
-            if (onTransactionUpdated) onTransactionUpdated(finalTx)
-          } else if (activeTx.type === 'Sales') {
-            await salesService.updateSaleAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Expense') {
-            await expenseService.updateExpenseAuditStatus(activeTx.id, 'Flagged', auditorName, trimmedRemarks)
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Income') {
-            const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-            await tenantService.saveAuditReview(leaseId, 'Flagged', trimmedRemarks)
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          }
+          const res = await saveTransactionAuditReview(activeTx, 'Flagged', trimmedRemarks)
+          const finalTx: DashboardTransactionItem =
+            (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') && res
+              ? {
+                  ...updated,
+                  auditedBy: res.audited_by || res.auditedBy || auditorName,
+                  auditDate: res.audited_at || res.auditDate || today,
+                }
+              : updated
+          setCurrentTx(finalTx)
+          if (onTransactionUpdated) onTransactionUpdated(finalTx)
         } catch (err: any) {
           setCurrentTx(activeTx)
           throw err
@@ -826,20 +808,8 @@ export const AuditTransactionModal: React.FC<AuditTransactionModalProps> = ({
         }
         setCurrentTx(updated)
         try {
-          if (activeTx.id.startsWith('tx-') || activeTx.type === 'Bank') {
-            await bankService.updateTransactionAuditStatus(activeTx.id, 'Pending Audit')
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Sales') {
-            await salesService.updateSaleAuditStatus(activeTx.id, 'Pending Audit')
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Expense') {
-            await expenseService.updateExpenseAuditStatus(activeTx.id, 'Pending Audit')
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          } else if (activeTx.type === 'Income') {
-            const leaseId = activeTx.id.replace(/^tenant_(pmt|lease)_/, '').split('_')[0]
-            await tenantService.saveAuditReview(leaseId, 'Pending Audit')
-            if (onTransactionUpdated) onTransactionUpdated(updated)
-          }
+          await saveTransactionAuditReview(activeTx, 'Pending Audit')
+          if (onTransactionUpdated) onTransactionUpdated(updated)
         } catch (err: any) {
           setCurrentTx(activeTx)
           throw err
