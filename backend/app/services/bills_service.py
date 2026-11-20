@@ -9,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.core.cache import system_cache
+from app.core.post_save import rest_and_orm_share_database
 from app.models.bills import Bill, BillPayment
 from app.models.company import Company
 from app.schemas.bills import (
@@ -852,8 +853,25 @@ class BillsService:
             logger.error("Failed to update bill payment: %s", exc, exc_info=True)
             raise HTTPException(status_code=409, detail="Failed to update bill payment. Please try again.")
 
-        system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
+        if expense is not None and not rest_and_orm_share_database():
+            try:
+                from app.db.supabase import get_supabase_admin_client
+                client = get_supabase_admin_client()
+                if client:
+                    client.table("expenses").update({
+                        "expense_date": str(expense.expense_date) if expense.expense_date else None,
+                        "amount": float(expense.amount or 0),
+                        "amount_paid": float(expense.amount_paid or 0),
+                        "payment_method": expense.payment_method,
+                        "cheque_no": expense.cheque_no,
+                        "bank_account_id": expense.bank_account_id,
+                        "remarks": expense.remarks,
+                    }).eq("expense_id", expense.expense_id).execute()
+            except Exception as exc:
+                logger.warning("Supabase mirror update failed for bill funding expense %s: %s", expense.expense_id, exc)
+
+        for tag in ("petty_cash", "notifications", "bills", "expenses", "bank_accounts", "dashboard"):
+            system_cache.invalidate_tag(tag)
         return self._to_output(self.get_bill(bill_id))
 
     def delete_payment(self, bill_id: int, payment_id: int) -> BillOut:
@@ -874,8 +892,8 @@ class BillsService:
             self.db.rollback()
             raise
         self._delete_remote_expenses([exp_id] if exp_id else [])
-        system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
+        for tag in ("petty_cash", "notifications", "bills", "expenses", "bank_accounts", "dashboard"):
+            system_cache.invalidate_tag(tag)
         return self._to_output(self.get_bill(bill_id))
 
     def delete_latest_payment(self, bill_id: int) -> BillOut:
@@ -895,8 +913,8 @@ class BillsService:
             self.db.rollback()
             raise
         self._delete_remote_expenses([exp_id] if exp_id else [])
-        system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
+        for tag in ("petty_cash", "notifications", "bills", "expenses", "bank_accounts", "dashboard"):
+            system_cache.invalidate_tag(tag)
         return self._to_output(self.get_bill(bill_id))
 
     def prepare_payment_edit_from_expense(self, expense_id: int, new_paid_amount: Optional[Decimal]) -> Optional[int]:

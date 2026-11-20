@@ -601,8 +601,8 @@ class BankService:
                 pass
 
         from app.core.cache import system_cache
-        system_cache.invalidate_tag("petty_cash")
-        system_cache.invalidate_tag("notifications")
+        for tag in ("petty_cash", "notifications", "bank_accounts", "dashboard", "expenses", "bills", "loans", "sales"):
+            system_cache.invalidate_tag(tag)
         return True
 
     def _generate_account_id(self) -> str:

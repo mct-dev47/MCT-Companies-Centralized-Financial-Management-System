@@ -450,3 +450,159 @@ def test_petty_cash_editable_after_finance_endorsement_locked_only_when_audited(
     svc.delete_topup(t_disb.topup_id)
     assert db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == t_disb.topup_id).first() is None
     assert db.query(Expense).filter(Expense.expense_id == exp.expense_id).first() is None
+
+
+def test_bill_payment_edit_errors_and_supabase_mirror_and_cache_invalidation(monkeypatch):
+    from app.core.cache import system_cache
+
+    db = _db()
+    bill = Bill(
+        bill_id=2,
+        company_id=1,
+        bill_name="Globe",
+        amount=Decimal("500.00"),
+        recurring="monthly",
+        due_date=date.today(),
+        due_date_reminder=3,
+    )
+    db.add(bill)
+    db.commit()
+
+    svc = BillsService(db)
+    with pytest.raises(HTTPException) as not_found_exc:
+        svc.update_payment(2, 99999, BillPaymentUpdate(amount=Decimal("100.00")))
+    assert not_found_exc.value.status_code == 404
+
+    svc.record_payment(
+        2,
+        BillPaymentCreate(
+            payment_date=date.today(),
+            amount=Decimal("200.00"),
+            billed_amount=Decimal("500.00"),
+            payment_method="Bank Transfer",
+            funding_source="bank",
+            bank_account_id="bnk-1",
+        ),
+    )
+    payment = db.query(BillPayment).filter(BillPayment.bill_id == 2).first()
+
+    with pytest.raises(HTTPException) as exceed_exc:
+        svc.update_payment(2, payment.bill_payment_id, BillPaymentUpdate(amount=Decimal("600.00")))
+    assert exceed_exc.value.status_code == 400
+
+    # Mock Supabase mirror boundary and verify cache tags are invalidated on edit
+    mirrored_updates = []
+
+    class FakeTable:
+        def update(self, payload):
+            mirrored_updates.append(payload)
+            return self
+
+        def eq(self, *_args):
+            return self
+
+        def execute(self):
+            return None
+
+    class FakeClient:
+        def table(self, _name):
+            return FakeTable()
+
+    monkeypatch.setattr("app.services.bills_service.rest_and_orm_share_database", lambda: False)
+    monkeypatch.setattr("app.db.supabase.get_supabase_admin_client", lambda: FakeClient())
+    system_cache.set("dash_key", {"ok": True}, ttl=60, tags=["dashboard"])
+    system_cache.set("exp_key", {"ok": True}, ttl=60, tags=["expenses"])
+
+    svc.update_payment(2, payment.bill_payment_id, BillPaymentUpdate(amount=Decimal("350.00"), notes="Synced"))
+    assert len(mirrored_updates) == 1
+    assert mirrored_updates[0]["amount"] == 350.0
+    assert system_cache.get("dash_key") is None
+    assert system_cache.get("exp_key") is None
+
+
+def test_petty_cash_supabase_mirror_and_edge_cases(monkeypatch):
+    from app.core.cache import system_cache
+
+    db = _db()
+    svc = PettyCashService(db)
+
+    # Seed approved topup so petty cash has float = 500
+    db.add(
+        PettyCashTopUp(
+            company_id=1,
+            amount=Decimal("500.00"),
+            topup_date=date.today(),
+            status="Approved",
+            request_type="topup",
+        )
+    )
+    exp = Expense(
+        company_id=1,
+        expense_date=date.today(),
+        description="Courier",
+        amount=Decimal("100.00"),
+        amount_paid=Decimal("100.00"),
+        payment_method="Petty Cash",
+        audit_status="Pending Audit",
+    )
+    db.add(exp)
+    db.flush()
+    disb = PettyCashTopUp(
+        company_id=1,
+        amount=Decimal("100.00"),
+        topup_date=date.today(),
+        description="Courier",
+        status="Approved",
+        request_type="disbursement",
+        petty_cash_expense_id=exp.expense_id,
+        total_expenses=Decimal("100.00"),
+        company_funded_amount=Decimal("100.00"),
+    )
+    db.add(disb)
+    db.commit()
+
+    # Editing disbursement beyond unreserved float (500) fails with 422
+    with pytest.raises(HTTPException) as over_exc:
+        svc.update_topup(disb.topup_id, amount=Decimal("900.00"))
+    assert over_exc.value.status_code == 422
+
+    # Mirror update and delete to Supabase REST + invalidate dashboard/expenses cache
+    calls = []
+
+    class FakeTable:
+        def update(self, payload):
+            calls.append(("update", payload))
+            return self
+
+        def delete(self):
+            calls.append(("delete", None))
+            return self
+
+        def eq(self, *_args):
+            return self
+
+        def execute(self):
+            return None
+
+    class FakeClient:
+        def table(self, _name):
+            return FakeTable()
+
+    monkeypatch.setattr("app.core.post_save.rest_and_orm_share_database", lambda: False)
+    monkeypatch.setattr("app.db.supabase.get_supabase_admin_client", lambda: FakeClient())
+    system_cache.set("pc_dash", {"ok": True}, ttl=60, tags=["dashboard"])
+
+    svc.update_topup(disb.topup_id, amount=Decimal("150.00"), description="Courier Updated")
+    assert any(kind == "update" and payload["amount"] == 150.0 for kind, payload in calls)
+    assert system_cache.get("pc_dash") is None
+
+    system_cache.set("pc_exp", {"ok": True}, ttl=60, tags=["expenses"])
+    svc.delete_topup(disb.topup_id)
+    assert any(kind == "delete" for kind, _ in calls)
+    assert system_cache.get("pc_exp") is None
+
+
+def test_delete_nonexistent_bank_returns_false():
+    db = _db()
+    assert BankService(db).delete_account("does-not-exist") is False
+

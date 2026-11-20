@@ -1781,7 +1781,24 @@ class PettyCashService:
             remark=topup.remark,
             created_by=topup.created_by,
         )
-        system_cache.invalidate_tag("petty_cash")
+        if existing_pc_exp is not None:
+            from app.core.post_save import rest_and_orm_share_database
+            if not rest_and_orm_share_database():
+                try:
+                    from app.db.supabase import get_supabase_admin_client
+                    client = get_supabase_admin_client()
+                    if client:
+                        client.table("expenses").update({
+                            "amount": float(existing_pc_exp.amount or 0),
+                            "amount_paid": float(existing_pc_exp.amount_paid or 0),
+                            "description": existing_pc_exp.description,
+                            "category_id": existing_pc_exp.category_id,
+                        }).eq("expense_id", existing_pc_exp.expense_id).execute()
+                except Exception:
+                    pass
+
+        for tag in ("petty_cash", "expenses", "dashboard"):
+            system_cache.invalidate_tag(tag)
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         return self._topup_output(topup)
 
@@ -2715,7 +2732,19 @@ class PettyCashService:
             request_type=deleted_req_type,
             deleted=True,
         )
-        system_cache.invalidate_tag("petty_cash")
+        if disbursement_exp_id is not None:
+            from app.core.post_save import rest_and_orm_share_database
+            if not rest_and_orm_share_database():
+                try:
+                    from app.db.supabase import get_supabase_admin_client
+                    client = get_supabase_admin_client()
+                    if client:
+                        client.table("expenses").delete().eq("expense_id", disbursement_exp_id).execute()
+                except Exception:
+                    pass
+
+        for tag in ("petty_cash", "expenses", "dashboard"):
+            system_cache.invalidate_tag(tag)
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
         if disbursement_exp_id is not None:
             ws_manager.broadcast_sync({"type": "EXPENSE_DELETED", "payload": {"expense_id": disbursement_exp_id}})

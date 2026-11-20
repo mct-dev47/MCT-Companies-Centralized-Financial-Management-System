@@ -506,6 +506,7 @@ export const PettyCashPage: React.FC = () => {
           particulars: editDescription.trim(),
           ...(editCategory.trim() ? { category: editCategory.trim() } : {}),
         })
+        pettyCashService.invalidateCache({ notifyBell: false })
       } else {
         await pettyCashService.updateTopUp(editEntry.recordId, {
           amount: numericAmount,
@@ -539,6 +540,7 @@ export const PettyCashPage: React.FC = () => {
       if (deleteConfirmEntry.expenseId != null || (deleteConfirmEntry.id && String(deleteConfirmEntry.id).startsWith('expense-'))) {
         const expId = deleteConfirmEntry.expenseId || deleteConfirmEntry.recordId
         await expenseService.deleteExpense(String(expId))
+        pettyCashService.invalidateCache({ notifyBell: false })
       } else {
         await pettyCashService.deleteTopUp(deleteConfirmEntry.recordId)
       }
