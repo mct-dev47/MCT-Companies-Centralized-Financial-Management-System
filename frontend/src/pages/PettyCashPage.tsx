@@ -82,6 +82,15 @@ import { websocketService } from '@/services/websocketService'
 
 export type PettyCashTransaction = PettyCashLedgerEntry
 
+function isPettyCashAuditLocked(entry: PettyCashTransaction): boolean {
+  if ((entry.auditStatus || '').toLowerCase() === 'verified') return true
+  const s = (entry.status || '').toLowerCase()
+  if (entry.requestType !== 'disbursement' && (s === 'approved' || s === 'reimbursed' || s === 'settled')) {
+    return true
+  }
+  return false
+}
+
 function getAuditableExpenseId(entry: PettyCashTransaction | null | undefined): number | null {
   if (!entry) return null
   if (entry.expenseId != null) return entry.expenseId
@@ -3187,7 +3196,7 @@ export const PettyCashPage: React.FC = () => {
               <span>View Details</span>
             </button>
 
-            {!isAudit && !isOwner && (
+            {!isAudit && !isOwner && !isPettyCashAuditLocked(activeMenuPetty) && (
               <>
                 <button
                   type="button"

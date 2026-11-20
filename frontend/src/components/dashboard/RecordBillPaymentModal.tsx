@@ -24,6 +24,7 @@ import {
   getBillPaymentOptions,
   type BillItem,
   type BillPaymentPeriod,
+  type BillPaymentRecord,
 } from '@/services/billsService'
 import { bankService, isAccountOwnedBy, preferSoleOwnedBanks, type BankAccount } from '@/services/bankService'
 import { pettyCashService } from '@/services/pettyCashService'
@@ -35,6 +36,7 @@ export interface RecordBillPaymentModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   bill: BillItem | null
+  editingPayment?: BillPaymentRecord | null
   onBillPaid?: (updatedBill: BillItem) => void
 }
 
@@ -83,6 +85,7 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
   open,
   onOpenChange,
   bill,
+  editingPayment,
   onBillPaid,
 }) => {
   const getTodayIso = () => formatToYYYYMMDD(new Date())
@@ -118,6 +121,46 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
     if (open && bill) {
       const options = getBillPaymentOptions(bill)
       const nextP = options.nextPayable
+      setIsReviewing(false)
+
+      if (editingPayment) {
+        const matchedP =
+          options.periods.find((p) => p.key === editingPayment.periodKey) || nextP
+        setSelectedPeriod(matchedP)
+        setPaymentDate(editingPayment.paymentDate || getTodayIso())
+        const billedAmt = editingPayment.billedAmount || matchedP?.billedAmount || 0
+        const hasInstallment = billedAmt > 0 && editingPayment.amount < billedAmt - 0.005
+        setIsInstallment(hasInstallment)
+        setTotalBilledInput(billedAmt > 0 ? String(billedAmt) : '')
+        setAmountInput(editingPayment.amount > 0 ? String(editingPayment.amount) : '')
+
+        const baseDate = new Date(
+          `${matchedP?.periodDate || editingPayment.paymentDate || bill.dueDate}T00:00:00`
+        )
+        const yr = !isNaN(baseDate.getFullYear()) ? baseDate.getFullYear() : new Date().getFullYear()
+        setSelectedYear(yr)
+        setDailyCalendarMonth(
+          new Date(yr, !isNaN(baseDate.getMonth()) ? baseDate.getMonth() : new Date().getMonth(), 1)
+        )
+
+        const inferredFunding: BillFundingSource | '' =
+          editingPayment.fundingSource ||
+          (editingPayment.paymentMethod?.toLowerCase().includes('petty cash')
+            ? 'petty_cash'
+            : editingPayment.bankAccountId
+            ? 'bank'
+            : '')
+        setPaymentMethod(editingPayment.paymentMethod || 'Bank Transfer')
+        setFundingSource(inferredFunding)
+        setBankAccountId(editingPayment.bankAccountId || '')
+        setTypingError(null)
+        setReferenceNo(editingPayment.referenceNo || editingPayment.refNo || '')
+        setNotes(editingPayment.notes || '')
+        setError('')
+        setSuccessBanner(null)
+        setIsSubmitting(false)
+        return
+      }
 
       setSelectedPeriod(nextP)
       setPaymentDate(getTodayIso())
@@ -155,7 +198,7 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
       setSuccessBanner(null)
       setIsSubmitting(false)
     }
-  }, [open, bill])
+  }, [open, bill, editingPayment])
 
   // Load the bill company's bank accounts (with their current balances) and petty cash balance
   React.useEffect(() => {
@@ -186,7 +229,7 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
   if (!bill) return null
 
   const selectedBank = bankAccounts.find((a) => String(a.id) === String(bankAccountId))
-  const availableFunds: number | null =
+  const baseAvailableFunds: number | null =
     fundingSource === 'bank'
       ? selectedBank
         ? Number(selectedBank.currentBalance) || 0
@@ -194,6 +237,16 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
       : fundingSource === 'petty_cash'
       ? pettyCashBalance
       : null
+  const editCreditBack =
+    editingPayment &&
+    ((fundingSource === 'bank' &&
+      editingPayment.fundingSource === 'bank' &&
+      String(editingPayment.bankAccountId || '') === String(bankAccountId || '')) ||
+      (fundingSource === 'petty_cash' && editingPayment.fundingSource === 'petty_cash'))
+      ? Number(editingPayment.amount) || 0
+      : 0
+  const availableFunds: number | null =
+    baseAvailableFunds !== null ? baseAvailableFunds + editCreditBack : null
   const fundingLabel = fundingSource === 'bank' ? selectedBank?.bankName || 'the selected bank' : 'petty cash'
   const fundingError: string | null = !fundingSource
     ? 'Please choose the funding source (bank or petty cash).'
@@ -207,10 +260,14 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
   const todayStr = getTodayIso()
 
   // Calculate remaining balance for currently selected period
-  const isPeriodPaid = Boolean(selectedPeriod?.paid)
-  const isPeriodPartiallyPaid = Boolean(selectedPeriod?.partiallyPaid)
+  const isPeriodPaid = Boolean(selectedPeriod?.paid) && !editingPayment
+  const isPeriodPartiallyPaid = Boolean(selectedPeriod?.partiallyPaid) && !editingPayment
 
-  const periodRemainingBalance = isPeriodPartiallyPaid
+  const periodRemainingBalance = editingPayment
+    ? selectedPeriod?.billedAmount && selectedPeriod.billedAmount > 0
+      ? Math.max(0, (selectedPeriod.remainingAmount ?? 0) + (Number(editingPayment.amount) || 0))
+      : Infinity
+    : isPeriodPartiallyPaid
     ? (selectedPeriod?.remainingAmount ?? 0)
     : isPeriodPaid
     ? 0
@@ -351,22 +408,36 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
 
     try {
       setIsSubmitting(true)
-      const updated = await billsService.recordPayment(bill.id, {
-        periodKey: selectedPeriod.key,
-        paymentDate,
-        amount: parsedAmount,
-        billedAmount: billedAmountToPass,
-        paymentMethod: fundingSource === 'petty_cash' ? 'Petty Cash' : paymentMethod,
-        fundingSource: fundingSource || undefined,
-        bankAccountId: fundingSource === 'bank' ? bankAccountId : undefined,
-        refNo: referenceNo.trim() || undefined,
-        referenceNo: referenceNo.trim() || undefined,
-        notes: notes.trim() || undefined,
-      })
+      const resolvedMethod = fundingSource === 'petty_cash' ? 'Petty Cash' : paymentMethod
+      const updated = editingPayment
+        ? await billsService.updatePayment(bill.id, editingPayment.id, {
+            paymentDate,
+            amount: parsedAmount,
+            billedAmount: billedAmountToPass,
+            paymentMethod: resolvedMethod,
+            fundingSource: fundingSource || null,
+            bankAccountId: fundingSource === 'bank' ? bankAccountId : null,
+            referenceNo: referenceNo.trim(),
+            notes: notes.trim(),
+          })
+        : await billsService.recordPayment(bill.id, {
+            periodKey: selectedPeriod.key,
+            paymentDate,
+            amount: parsedAmount,
+            billedAmount: billedAmountToPass,
+            paymentMethod: resolvedMethod,
+            fundingSource: fundingSource || undefined,
+            bankAccountId: fundingSource === 'bank' ? bankAccountId : undefined,
+            refNo: referenceNo.trim() || undefined,
+            referenceNo: referenceNo.trim() || undefined,
+            notes: notes.trim() || undefined,
+          })
 
       const isFull = !willBePartiallyPaid
       setSuccessBanner(
-        isFull
+        editingPayment
+          ? `Payment updated to ${formatPHP(parsedAmount)} for ${selectedPeriod.label}.`
+          : isFull
           ? `Full payment of ${formatPHP(parsedAmount)} recorded for ${selectedPeriod.label}! Period marked as Paid.`
           : `Installment of ${formatPHP(parsedAmount)} recorded for ${selectedPeriod.label}! Period marked as Partially Paid.`
       )
@@ -398,17 +469,18 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
         <DialogHeader>
           <DialogTitle className="text-lg font-bold text-focus flex items-center gap-2">
             <Coins className="h-5 w-5 text-emerald-600" />
-            <span>Record Bill Payment</span>
+            <span>{editingPayment ? 'Edit Bill Payment' : 'Record Bill Payment'}</span>
           </DialogTitle>
           <DialogDescription className="text-xs text-muted-fg">
-            Record payment remittance for <strong className="text-focus">{bill.billerName}</strong> ({bill.company} • {bill.billingCycle} Schedule).
+            {editingPayment ? 'Update payment details for' : 'Record payment remittance for'}{' '}
+            <strong className="text-focus">{bill.billerName}</strong> ({bill.company} • {bill.billingCycle} Schedule).
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4 mt-2">
           {isReviewing ? (
             <ModalReviewStep
-              title="Review Bill Payment Details"
+              title={editingPayment ? 'Review Updated Bill Payment' : 'Review Bill Payment Details'}
               subtitle="Please verify the payment details before submitting this remittance."
               errorMessage={error}
               items={[
@@ -1088,7 +1160,9 @@ export const RecordBillPaymentModal: React.FC<RecordBillPaymentModalProps> = ({
               isLoading={isSubmitting}
               className="h-11 px-6 rounded-[10px] text-xs sm:text-sm font-semibold cursor-pointer"
             >
-              <span>{isReviewing ? 'Record Payment' : 'Review Payment'}</span>
+              <span>
+                {isReviewing ? (editingPayment ? 'Save Changes' : 'Record Payment') : 'Review Payment'}
+              </span>
             </Button>
           </div>
         </form>

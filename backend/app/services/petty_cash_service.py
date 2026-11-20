@@ -1532,6 +1532,51 @@ class PettyCashService:
         })
         return self._topup_output(topup)
 
+    def _ensure_not_audited(self, topup: PettyCashTopUp, action_label: str) -> List[Expense]:
+        """Allow edit/delete for pending, finance-endorsed, rejected, disapproved, and un-audited disbursements.
+        Block only once Audited by an Auditor (Verified or Auditor-approved workflow states).
+        """
+        if (getattr(topup, "audit_status", None) or "").strip().lower() == "verified":
+            raise HTTPException(
+                status_code=409,
+                detail=f"This petty cash transaction has been Verified by an Auditor and cannot be {action_label}.",
+            )
+
+        linked_exp_ids = {
+            eid
+            for eid in (
+                topup.petty_cash_expense_id,
+                topup.existing_expense_id,
+                getattr(topup, "reimbursement_expense_id", None),
+            )
+            if eid is not None
+        }
+        linked_expenses = (
+            self.db.query(Expense)
+            .filter(
+                or_(
+                    Expense.linked_topup_id == topup.topup_id,
+                    Expense.expense_id.in_(linked_exp_ids) if linked_exp_ids else False,
+                )
+            )
+            .all()
+        )
+        for exp in linked_expenses:
+            if (exp.audit_status or "").strip().lower() == "verified":
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"This petty cash transaction has a Verified linked expense and cannot be {action_label}.",
+                )
+
+        req_type = (getattr(topup, "request_type", "topup") or "topup").strip().lower()
+        current_status = (topup.status or "").strip().lower()
+        if req_type != "disbursement" and current_status in {"approved", "reimbursed", "settled"}:
+            raise HTTPException(
+                status_code=409,
+                detail=f"This petty cash transaction has already been approved by Audit ({topup.status}) and cannot be {action_label}.",
+            )
+        return linked_expenses
+
     def update_topup(
         self,
         topup_id: int,
@@ -1550,12 +1595,7 @@ class PettyCashService:
         if not topup:
             raise HTTPException(status_code=404, detail="Petty cash request not found.")
 
-        current_status = (topup.status or "").lower()
-        if current_status not in ["pending finance endorsement", "pending finance approval"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"This request has already been reviewed by finance ({topup.status}) and cannot be edited."
-            )
+        self._ensure_not_audited(topup, "edited")
 
         req_type = (topup.request_type or "topup").lower()
         existing_pc_exp: Optional[Expense] = None
@@ -1666,6 +1706,34 @@ class PettyCashService:
             if existing_pc_exp is not None:
                 if description is not None:
                     existing_pc_exp.description = topup.description or f"Petty Cash Expense for {topup.paid_by or 'Employee'}"
+                if category is not None:
+                    cat_obj = (
+                        self.db.query(Category).filter(func.lower(Category.name) == topup.category.lower()).first()
+                        if topup.category
+                        else None
+                    )
+                    existing_pc_exp.category_id = cat_obj.category_id if cat_obj else None
+        elif req_type == "disbursement":
+            prev_amt = _to_decimal(topup.amount)
+            new_amt = _to_decimal(amount) if amount is not None else prev_amt
+            if new_amt <= ZERO:
+                raise HTTPException(status_code=422, detail="Disbursement amount must be greater than zero.")
+            if new_amt > prev_amt:
+                self._get_wallet_with_lock(topup.company_id)
+                unreserved = self.get_unreserved_balance(topup.company_id, exclude_topup_id=topup.topup_id)
+                if (new_amt - prev_amt) > unreserved:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Insufficient unreserved petty cash balance. Available: ₱{unreserved:,.2f}.",
+                    )
+            topup.amount = new_amt
+            topup.total_expenses = new_amt
+            topup.company_funded_amount = new_amt
+            if existing_pc_exp is not None:
+                existing_pc_exp.amount = new_amt
+                existing_pc_exp.amount_paid = new_amt
+                if description is not None:
+                    existing_pc_exp.description = topup.description or f"Petty Cash Disbursement ({topup.paid_by or 'Staff'})"
                 if category is not None:
                     cat_obj = (
                         self.db.query(Category).filter(func.lower(Category.name) == topup.category.lower()).first()
@@ -2608,39 +2676,21 @@ class PettyCashService:
         if not topup:
             raise HTTPException(status_code=404, detail="Top-up not found.")
 
-        current_status = (topup.status or "").lower()
-        if current_status not in ["pending finance endorsement", "pending finance approval"]:
-            raise HTTPException(
-                status_code=400,
-                detail=f"This request has already been reviewed by finance ({topup.status}) and cannot be deleted."
-            )
+        linked_expenses = self._ensure_not_audited(topup, "deleted")
 
         deleted_id = topup.topup_id
         deleted_comp_id = topup.company_id
         deleted_status = topup.status
         deleted_amount = _to_decimal(topup.amount)
         deleted_req_type = topup.request_type
-
-        # Preserve any already-deducted petty cash Expense as a standalone Expense and clear FK links.
-        linked_exp_ids = {
-            eid
-            for eid in (
-                topup.petty_cash_expense_id,
-                topup.existing_expense_id,
-                getattr(topup, "reimbursement_expense_id", None),
-            )
-            if eid is not None
-        }
-        linked_expenses = (
-            self.db.query(Expense)
-            .filter(
-                or_(
-                    Expense.linked_topup_id == topup.topup_id,
-                    Expense.expense_id.in_(linked_exp_ids) if linked_exp_ids else False,
-                )
-            )
-            .all()
+        is_disbursement = (deleted_req_type or "").strip().lower() == "disbursement"
+        disbursement_exp_id = (
+            topup.petty_cash_expense_id
+            if is_disbursement and topup.petty_cash_expense_id and topup.petty_cash_expense_id != topup.existing_expense_id
+            else None
         )
+
+        # Clear FK links; for direct disbursements, also remove the disbursement's own Expense so float restores.
         for exp in linked_expenses:
             if exp.linked_topup_id == topup.topup_id:
                 exp.linked_topup_id = None
@@ -2649,6 +2699,11 @@ class PettyCashService:
         if hasattr(topup, "reimbursement_expense_id"):
             topup.reimbursement_expense_id = None
         self.db.flush()
+
+        if disbursement_exp_id is not None:
+            for exp in linked_expenses:
+                if exp.expense_id == disbursement_exp_id:
+                    self.db.delete(exp)
 
         self.db.delete(topup)
         self.db.commit()
@@ -2662,6 +2717,8 @@ class PettyCashService:
         )
         system_cache.invalidate_tag("petty_cash")
         ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED"})
+        if disbursement_exp_id is not None:
+            ws_manager.broadcast_sync({"type": "EXPENSE_DELETED", "payload": {"expense_id": disbursement_exp_id}})
         return topup
 
     def update_threshold(self, company: Company, threshold: Decimal) -> PettyCashSummaryOut:

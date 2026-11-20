@@ -265,6 +265,20 @@ def delete_bank_account(
             "action": "deleted",
         }
     })
+    for event_type in (
+        "SALES_UPDATED",
+        "EXPENSES_UPDATED",
+        "BILLS_UPDATED",
+        "RECEIVABLES_UPDATED",
+        "LOANS_UPDATED",
+        "TENANTS_UPDATED",
+        "LENDING_UPDATED",
+        "PETTY_CASH_UPDATED",
+    ):
+        ws_manager.broadcast_sync({
+            "type": event_type,
+            "payload": {"account_id": account_id, "company_id": company_id, "action": "bank_deleted"},
+        })
     return None
 
 

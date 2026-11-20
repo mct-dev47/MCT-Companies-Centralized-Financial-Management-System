@@ -16,6 +16,7 @@ from app.schemas.bills import (
     BillOut,
     BillPaymentCreate,
     BillPaymentOut,
+    BillPaymentUpdate,
     BillPeriodOut,
     BillReminderOut,
     BillScheduleOut,
@@ -690,6 +691,171 @@ class BillsService:
             except Exception as exc:
                 logger.error("Supabase delete failed for bill funding expense %s: %s", expense_id, exc)
 
+    def update_payment(self, bill_id: int, payment_id: int, data: BillPaymentUpdate) -> BillOut:
+        payment = self.db.query(BillPayment).filter(
+            BillPayment.bill_id == bill_id,
+            BillPayment.bill_payment_id == payment_id,
+        ).first()
+        if not payment:
+            raise HTTPException(status_code=404, detail="Bill payment not found.")
+
+        from app.api.v1.endpoints.expenses import reconcile_expense_bank
+        from app.models.bank import BankAccount
+        from app.models.finance import Expense
+        from app.services.petty_cash_service import PettyCashService
+
+        bill = self.get_bill(bill_id)
+        expense = (
+            self.db.query(Expense).filter(Expense.expense_id == payment.expense_id).first()
+            if payment.expense_id
+            else None
+        )
+        if expense is not None and (expense.audit_status or "").strip().lower() == "verified":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This bill payment has a Verified funding expense and cannot be edited without audit unlock.",
+            )
+
+        new_amount = (
+            Decimal(str(data.amount)).quantize(Decimal("0.01"))
+            if data.amount is not None
+            else Decimal(str(payment.amount)).quantize(Decimal("0.01"))
+        )
+        if new_amount <= Decimal("0.00"):
+            raise HTTPException(status_code=400, detail="Payment amount must be greater than zero.")
+
+        period_payments = [p for p in bill.payments if p.period_key == payment.period_key]
+        other_paid = sum(
+            (Decimal(str(p.amount or 0)) for p in period_payments if p.bill_payment_id != payment.bill_payment_id),
+            Decimal("0.00"),
+        )
+        billed_candidates = [
+            Decimal(str(p.billed_amount))
+            for p in period_payments
+            if p.billed_amount is not None and Decimal(str(p.billed_amount)) > Decimal("0.00")
+        ]
+        if data.billed_amount is not None and data.billed_amount > Decimal("0.00"):
+            period_billed = Decimal(str(data.billed_amount)).quantize(Decimal("0.01"))
+        elif billed_candidates:
+            period_billed = max(billed_candidates).quantize(Decimal("0.01"))
+        elif bill.amount and bill.amount > Decimal("0.00"):
+            period_billed = Decimal(str(bill.amount)).quantize(Decimal("0.01"))
+        else:
+            period_billed = Decimal("0.00")
+
+        if period_billed > Decimal("0.00"):
+            remaining = max(Decimal("0.00"), period_billed - other_paid)
+            if new_amount > (remaining + Decimal("0.01")):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Payment amount (₱{new_amount:,.2f}) cannot exceed the remaining balance (₱{remaining:,.2f}).",
+                )
+
+        new_funding = data.funding_source if data.funding_source is not None else payment.funding_source
+        new_bank_id = (
+            (data.bank_account_id or "").strip() or None
+            if data.funding_source == "bank" or (data.funding_source is None and data.bank_account_id is not None)
+            else (None if data.funding_source == "petty_cash" else payment.bank_account_id)
+        )
+        if new_funding == "bank":
+            if not new_bank_id:
+                raise HTTPException(status_code=400, detail="Please choose the bank account that pays this bill.")
+            account = self.db.query(BankAccount).filter(BankAccount.id == new_bank_id).first()
+            if account is None:
+                raise HTTPException(status_code=400, detail="The selected bank account was not found.")
+            company = self.db.query(Company).filter(Company.company_id == bill.company_id).first()
+            company_name = (company.company_name if company else "").strip().lower()
+            owners = [n.strip().lower() for n in account.company_names]
+            if account.company_id != bill.company_id and company_name not in owners:
+                raise HTTPException(status_code=400, detail="The selected bank account does not belong to this bill's company.")
+            already_debited = (
+                Decimal(str(payment.amount or 0))
+                if payment.funding_source == "bank" and payment.bank_account_id == new_bank_id
+                else Decimal("0.00")
+            )
+            available = Decimal(str(account.current_balance or 0)) + already_debited
+            if new_amount > available:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Payment amount (₱{new_amount:,.2f}) is more than the balance of {account.bank_name} (₱{available:,.2f}).",
+                )
+        elif new_funding == "petty_cash":
+            new_bank_id = None
+            already_debited = (
+                Decimal(str(payment.amount or 0))
+                if payment.funding_source == "petty_cash"
+                else Decimal("0.00")
+            )
+            available = PettyCashService(self.db).get_balance(bill.company_id) + already_debited
+            if new_amount > available:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Payment amount (₱{new_amount:,.2f}) is more than the petty cash balance (₱{available:,.2f}).",
+                )
+
+        if data.payment_date is not None:
+            payment.payment_date = data.payment_date
+        payment.amount = new_amount
+        if data.billed_amount is not None:
+            payment.billed_amount = data.billed_amount
+        if data.payment_method is not None:
+            method_clean = data.payment_method.strip()
+            if new_funding == "petty_cash":
+                method_clean = "Petty Cash"
+            elif new_funding == "bank" and "petty cash" in method_clean.lower():
+                method_clean = "Bank Transfer"
+            payment.payment_method = method_clean
+        elif new_funding == "petty_cash":
+            payment.payment_method = "Petty Cash"
+        if data.reference_no is not None:
+            payment.reference_no = data.reference_no.strip() or None
+        if data.notes is not None:
+            payment.notes = data.notes.strip() or None
+        payment.funding_source = new_funding
+        payment.bank_account_id = new_bank_id
+
+        try:
+            self.db.flush()
+            periods = self._periods(bill)
+            matched_period = next((p for p in periods if p["period_key"] == payment.period_key), None)
+            period_label = matched_period["period_label"] if matched_period else (payment.period_key or "")
+            if new_funding:
+                if expense is None:
+                    expense = self._create_funding_expense(bill, payment, period_label)
+                    payment.expense_id = expense.expense_id
+                else:
+                    expense.expense_date = payment.payment_date
+                    expense.amount = payment.amount
+                    expense.amount_paid = payment.amount
+                    expense.payment_method = payment.payment_method
+                    expense.cheque_no = payment.reference_no
+                    expense.bank_account_id = payment.bank_account_id
+                    expense.remarks = payment.notes
+                self.db.flush()
+                reconcile_expense_bank(
+                    self.db,
+                    expense_id=expense.expense_id,
+                    force_zero=(new_funding != "bank"),
+                    commit=False,
+                )
+            elif expense is not None:
+                reconcile_expense_bank(self.db, expense_id=expense.expense_id, force_zero=True, commit=False)
+
+            refreshed_bill = self.get_bill(bill_id)
+            refreshed_bill.status = self._status(refreshed_bill)
+            self.db.commit()
+        except HTTPException:
+            self.db.rollback()
+            raise
+        except Exception as exc:
+            self.db.rollback()
+            logger.error("Failed to update bill payment: %s", exc, exc_info=True)
+            raise HTTPException(status_code=409, detail="Failed to update bill payment. Please try again.")
+
+        system_cache.invalidate_tag("petty_cash")
+        system_cache.invalidate_tag("notifications")
+        return self._to_output(self.get_bill(bill_id))
+
     def delete_payment(self, bill_id: int, payment_id: int) -> BillOut:
         payment = self.db.query(BillPayment).filter(
             BillPayment.bill_id == bill_id,
@@ -700,6 +866,9 @@ class BillsService:
         try:
             exp_id = self._remove_funding_expense(payment)
             self.db.delete(payment)
+            self.db.flush()
+            bill = self.get_bill(bill_id)
+            bill.status = self._status(bill)
             self.db.commit()
         except Exception:
             self.db.rollback()
