@@ -1140,7 +1140,7 @@ def test_delete_bill_rolls_back_everything_when_a_payment_cleanup_fails(db_sessi
 
 
 def test_delete_petty_cash_pending_succeeds_and_reviewed_rejected(db_session):
-    """Pending petty cash topups can be deleted via transactions endpoint; reviewed ones return 400."""
+    """Pending petty cash topups can be deleted via transactions endpoint; audited ones return 409."""
     comp = Company(company_name="Petty Delete Corp")
     db_session.add(comp)
     db_session.flush()
@@ -1169,7 +1169,7 @@ def test_delete_petty_cash_pending_succeeds_and_reviewed_rejected(db_session):
     assert db_session.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == pending.topup_id).first() is None
 
     res_err = client.delete(f"/api/v1/transactions/petty_{reviewed.topup_id}")
-    assert res_err.status_code == 400
+    assert res_err.status_code == 409
 
 
 def test_delete_manual_bank_tx_cross_company_403_and_verified_409(db_session):
