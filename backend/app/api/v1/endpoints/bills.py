@@ -23,6 +23,7 @@ from app.schemas.bills import (
     BillCreate,
     BillOut,
     BillPaymentCreate,
+    BillPaymentUpdate,
     BillReminderOut,
     BillScheduleOut,
     BillStatsOut,
@@ -214,6 +215,25 @@ def record_bill_payment(
     return result
 
 
+@router.patch("/{bill_id}/payments/{payment_id}", response_model=BillOut, summary="Update a bill payment")
+def update_bill_payment(
+    bill_id: int,
+    payment_id: int,
+    payment_in: BillPaymentUpdate,
+    user: AuthenticatedUser = Depends(require_business_writer),
+    db: Session = Depends(get_db),
+):
+    service = BillsService(db)
+    bill = service.get_bill(bill_id)
+    check_company_access(user, bill.company_id)
+    result = service.update_payment(bill_id, payment_id, payment_in)
+    ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"action": "payment_updated", "bill_id": bill_id}})
+    ws_manager.broadcast_sync({"type": "EXPENSE_UPDATED", "payload": {"bill_id": bill_id}})
+    ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"bill_id": bill_id}})
+    ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED", "payload": {"bill_id": bill_id}})
+    return result
+
+
 @router.delete("/{bill_id}/payments/{payment_id}", response_model=BillOut, summary="Remove a bill payment")
 def delete_bill_payment(
     bill_id: int,
@@ -226,6 +246,9 @@ def delete_bill_payment(
     check_company_access(user, bill.company_id)
     result = service.delete_payment(bill_id, payment_id)
     ws_manager.broadcast_sync({"type": "BILLS_UPDATED", "payload": {"action": "payment_deleted", "bill_id": bill_id}})
+    ws_manager.broadcast_sync({"type": "EXPENSE_DELETED", "payload": {"bill_id": bill_id}})
+    ws_manager.broadcast_sync({"type": "BANK_UPDATED", "payload": {"bill_id": bill_id}})
+    ws_manager.broadcast_sync({"type": "PETTY_CASH_UPDATED", "payload": {"bill_id": bill_id}})
     return result
 
 

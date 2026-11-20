@@ -309,13 +309,301 @@ class BankService:
         account = self.get_account(account_id)
         if not account:
             return False
+
+        from app.models.bills import Bill, BillPayment
+        from app.models.finance import Expense, Sale
+        from app.models.intercompany_transfer import IntercompanyTransfer
+        from app.models.lending import Borrower, LendingTransaction
+        from app.models.loan import Loan, LoanRepayment
+        from app.models.petty_cash import PettyCashTopUp
+        from app.models.receivable import Receivable, ReceivablePayment
+        from app.models.tenant import TenantLease, TenantLeasePayment
+        from app.services import receipt_storage
+        from app.services.bills_service import BillsService
+
+        bank_txs = (
+            self.db.query(BankTransaction)
+            .filter(BankTransaction.bank_account_id == account_id)
+            .all()
+        )
+        tx_ids = {tx.id for tx in bank_txs}
+        linked_sale_ids = {tx.source_sale_id for tx in bank_txs if tx.source_sale_id is not None}
+        linked_expense_ids = {tx.source_expense_id for tx in bank_txs if tx.source_expense_id is not None}
+        linked_loan_ids = {tx.source_loan_id for tx in bank_txs if tx.source_loan_id is not None}
+        linked_repayment_ids = {
+            tx.source_loan_repayment_id for tx in bank_txs if tx.source_loan_repayment_id is not None
+        }
+        linked_rec_pay_ids = {
+            tx.source_receivable_payment_id for tx in bank_txs if tx.source_receivable_payment_id is not None
+        }
+        linked_topup_ids = {tx.source_topup_id for tx in bank_txs if tx.source_topup_id is not None}
+
+        receipt_paths: list[str] = []
+        deleted_sale_ids: list[int] = []
+        deleted_expense_ids: list[int] = []
+
         try:
+            # 1. Identify all Sales & Expenses tied to this bank
+            sales_q = self.db.query(Sale).filter(
+                (Sale.bank_account_id == account_id)
+                | (Sale.sales_id.in_(linked_sale_ids) if linked_sale_ids else False)
+            )
+            sales_to_delete = sales_q.all()
+            sale_id_set = {s.sales_id for s in sales_to_delete}
+            deleted_sale_ids = list(sale_id_set)
+
+            expenses_q = self.db.query(Expense).filter(
+                (Expense.bank_account_id == account_id)
+                | (Expense.expense_id.in_(linked_expense_ids) if linked_expense_ids else False)
+            )
+            expenses_to_delete = expenses_q.all()
+            expense_id_set = {e.expense_id for e in expenses_to_delete}
+            deleted_expense_ids = list(expense_id_set)
+
+            # 2. Petty Cash TopUps & Intercompany Transfers
+            transfers_to_delete = (
+                self.db.query(IntercompanyTransfer)
+                .filter(
+                    (IntercompanyTransfer.source_bank_id == account_id)
+                    | (IntercompanyTransfer.destination_bank_id == account_id)
+                    | (IntercompanyTransfer.source_bank_tx_id.in_(tx_ids) if tx_ids else False)
+                    | (IntercompanyTransfer.destination_bank_tx_id.in_(tx_ids) if tx_ids else False)
+                    | (IntercompanyTransfer.reversal_bank_tx_id.in_(tx_ids) if tx_ids else False)
+                    | (IntercompanyTransfer.repayment_source_bank_tx_id.in_(tx_ids) if tx_ids else False)
+                    | (IntercompanyTransfer.repayment_destination_bank_tx_id.in_(tx_ids) if tx_ids else False)
+                )
+                .all()
+            )
+            transfer_ids = {t.transfer_id for t in transfers_to_delete}
+
+            topups_to_delete = (
+                self.db.query(PettyCashTopUp)
+                .filter(
+                    (PettyCashTopUp.bank_account_id == account_id)
+                    | (PettyCashTopUp.destination_bank_id == account_id)
+                    | (PettyCashTopUp.topup_id.in_(linked_topup_ids) if linked_topup_ids else False)
+                    | (PettyCashTopUp.intercompany_transfer_id.in_(transfer_ids) if transfer_ids else False)
+                )
+                .all()
+            )
+            for topup in topups_to_delete:
+                receipt_paths.extend(receipt_storage.collect_paths(topup.receipt_url, topup.attachments))
+                self.db.delete(topup)
+
+            # Clear any remaining FK references to deleted expenses or transfers on surviving topups
+            if expense_id_set or transfer_ids:
+                surviving_topups = self.db.query(PettyCashTopUp).all()
+                for st in surviving_topups:
+                    if st in topups_to_delete:
+                        continue
+                    if st.existing_expense_id in expense_id_set:
+                        st.existing_expense_id = None
+                    if st.petty_cash_expense_id in expense_id_set:
+                        st.petty_cash_expense_id = None
+                    if getattr(st, "reimbursement_expense_id", None) in expense_id_set:
+                        st.reimbursement_expense_id = None
+                    if st.intercompany_transfer_id in transfer_ids:
+                        st.intercompany_transfer_id = None
+
+            self.db.flush()
+            for tr in transfers_to_delete:
+                self.db.delete(tr)
+            self.db.flush()
+
+            # 3. Bills: delete BillPayments tied to this bank or deleted expenses, then recompute Bill.status
+            bill_payments_to_delete = (
+                self.db.query(BillPayment)
+                .filter(
+                    (BillPayment.bank_account_id == account_id)
+                    | (BillPayment.expense_id.in_(expense_id_set) if expense_id_set else False)
+                )
+                .all()
+            )
+            affected_bill_ids = {bp.bill_id for bp in bill_payments_to_delete}
+            for bp in bill_payments_to_delete:
+                self.db.delete(bp)
+            self.db.flush()
+
+            if affected_bill_ids:
+                bills_svc = BillsService(self.db)
+                for b in self.db.query(Bill).filter(Bill.bill_id.in_(affected_bill_ids)).all():
+                    b.status = bills_svc._status(b)
+
+            # 4. Receivables: delete ReceivablePayments tied to this bank, and Receivables from deleted Sales
+            rec_payments_to_delete = (
+                self.db.query(ReceivablePayment)
+                .filter(
+                    (ReceivablePayment.bank_account_id == account_id)
+                    | (ReceivablePayment.payment_id.in_(linked_rec_pay_ids) if linked_rec_pay_ids else False)
+                )
+                .all()
+            )
+            affected_receivable_ids = {rp.receivable_id for rp in rec_payments_to_delete}
+            for rp in rec_payments_to_delete:
+                self.db.delete(rp)
+            self.db.flush()
+
+            if sale_id_set:
+                for rec in self.db.query(Receivable).filter(Receivable.sale_id.in_(sale_id_set)).all():
+                    affected_receivable_ids.discard(rec.receivable_id)
+                    self.db.delete(rec)
+                self.db.flush()
+
+            if affected_receivable_ids:
+                for rec in self.db.query(Receivable).filter(Receivable.receivable_id.in_(affected_receivable_ids)).all():
+                    paid_sum = sum((Decimal(str(p.amount or 0)) for p in rec.payments), Decimal("0.00"))
+                    total_amt = Decimal(str(rec.total_amount or 0))
+                    rec.amount_paid = paid_sum
+                    rec.balance = max(Decimal("0.00"), total_amt - paid_sum)
+                    if rec.balance <= Decimal("0.00") and total_amt > Decimal("0.00"):
+                        rec.payment_status = "Paid"
+                    elif paid_sum > Decimal("0.00"):
+                        rec.payment_status = "Partial"
+                    else:
+                        rec.payment_status = "Unpaid"
+
+            # 5. Loans & Loan Repayments
+            loans_to_delete = (
+                self.db.query(Loan)
+                .filter(
+                    (Loan.bank_account_id == account_id)
+                    | (Loan.borrower_bank_account_id == account_id)
+                    | (Loan.loan_id.in_(linked_loan_ids) if linked_loan_ids else False)
+                )
+                .all()
+            )
+            deleted_loan_ids = {ln.loan_id for ln in loans_to_delete}
+
+            repayments_to_delete = (
+                self.db.query(LoanRepayment)
+                .filter(
+                    (LoanRepayment.bank_account_id == account_id)
+                    | (LoanRepayment.loan_repayment_id.in_(linked_repayment_ids) if linked_repayment_ids else False)
+                    | (LoanRepayment.expense_id.in_(expense_id_set) if expense_id_set else False)
+                    | (LoanRepayment.loan_id.in_(deleted_loan_ids) if deleted_loan_ids else False)
+                )
+                .all()
+            )
+            for rep in repayments_to_delete:
+                self.db.delete(rep)
+            self.db.flush()
+
+            for ln in loans_to_delete:
+                self.db.delete(ln)
+            self.db.flush()
+
+            # 6. Tenants: delete TenantLeasePayments tied to deleted Sales or leases on this bank
+            leases_on_bank = self.db.query(TenantLease).filter(TenantLease.bank_account_id == account_id).all()
+            lease_ids_on_bank = {ls.lease_id for ls in leases_on_bank}
+            tenant_payments_to_delete = (
+                self.db.query(TenantLeasePayment)
+                .filter(
+                    (TenantLeasePayment.sale_id.in_(sale_id_set) if sale_id_set else False)
+                    | (TenantLeasePayment.lease_id.in_(lease_ids_on_bank) if lease_ids_on_bank else False)
+                )
+                .all()
+            )
+            affected_lease_ids = {tp.lease_id for tp in tenant_payments_to_delete}
+            for tp in tenant_payments_to_delete:
+                self.db.delete(tp)
+            for ls in leases_on_bank:
+                ls.bank_account_id = None
+            self.db.flush()
+
+            if affected_lease_ids:
+                for ls in self.db.query(TenantLease).filter(TenantLease.lease_id.in_(affected_lease_ids)).all():
+                    paid_sum = sum((Decimal(str(p.amount or 0)) for p in ls.payments), Decimal("0.00"))
+                    total_payable = Decimal(str(ls.total_amount_payable or 0))
+                    if total_payable > Decimal("0.00") and paid_sum >= total_payable:
+                        ls.status = "Paid"
+                    elif ls.status == "Paid":
+                        ls.status = "Active"
+
+            # 7. Lending: delete LendingTransactions tied to deleted Sales or Borrowers on this bank
+            borrowers_on_bank = self.db.query(Borrower).filter(Borrower.bank_account_id == account_id).all()
+            borrower_ids_on_bank = {b.borrower_id for b in borrowers_on_bank}
+            lending_txs_to_delete = (
+                self.db.query(LendingTransaction)
+                .filter(
+                    (LendingTransaction.sale_id.in_(sale_id_set) if sale_id_set else False)
+                    | (LendingTransaction.borrower_id.in_(borrower_ids_on_bank) if borrower_ids_on_bank else False)
+                )
+                .all()
+            )
+            affected_borrower_ids = {lt.borrower_id for lt in lending_txs_to_delete}
+            for lt in lending_txs_to_delete:
+                self.db.delete(lt)
+            for b in borrowers_on_bank:
+                b.bank_account_id = None
+                if b.release_expense_id in expense_id_set:
+                    b.release_expense_id = None
+            if expense_id_set:
+                for b in self.db.query(Borrower).filter(Borrower.release_expense_id.in_(expense_id_set)).all():
+                    b.release_expense_id = None
+            self.db.flush()
+
+            if affected_borrower_ids:
+                for b in self.db.query(Borrower).filter(Borrower.borrower_id.in_(affected_borrower_ids)).all():
+                    paid_sum = sum(
+                        (
+                            Decimal(str(lt.amount or 0))
+                            for lt in b.transactions
+                            if (lt.transaction_type or "").lower() == "repayment"
+                        ),
+                        Decimal("0.00"),
+                    )
+                    total_due = Decimal(str(b.total_payable or 0)) + Decimal(str(b.total_penalties or 0))
+                    b.amount_paid = paid_sum
+                    b.remaining_balance = max(Decimal("0.00"), total_due - paid_sum)
+                    if b.remaining_balance <= Decimal("0.00") and total_due > Decimal("0.00"):
+                        b.status = "Fully Paid"
+                    elif b.status == "Fully Paid":
+                        b.status = "Active"
+
+            # 8. Delete Sales, Expenses, BankTransactions, and finally the BankAccount
+            for s in sales_to_delete:
+                self.db.delete(s)
+            for e in expenses_to_delete:
+                self.db.delete(e)
+            for tx in bank_txs:
+                self.db.delete(tx)
+            self.db.flush()
+
             self.db.delete(account)
             self.db.commit()
-            return True
-        except Exception:
+        except Exception as exc:
+            logger.error("Cascade delete failed for bank account %s: %s", account_id, exc, exc_info=True)
             self.db.rollback()
             return False
+
+        # Best-effort cleanup of receipt files and Supabase mirrors after commit
+        if receipt_paths:
+            try:
+                receipt_storage.delete_paths(receipt_paths)
+            except Exception:
+                pass
+        if deleted_sale_ids or deleted_expense_ids:
+            try:
+                from app.db.supabase import get_supabase_admin_client
+                client = get_supabase_admin_client()
+                if client:
+                    for sid in deleted_sale_ids:
+                        try:
+                            client.table("sales").delete().eq("sales_id", sid).execute()
+                        except Exception:
+                            pass
+                    for eid in deleted_expense_ids:
+                        try:
+                            client.table("expenses").delete().eq("expense_id", eid).execute()
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        from app.core.cache import system_cache
+        for tag in ("petty_cash", "notifications", "bank_accounts", "dashboard", "expenses", "bills", "loans", "sales"):
+            system_cache.invalidate_tag(tag)
+        return True
 
     def _generate_account_id(self) -> str:
         count = self.db.query(BankAccount).count()

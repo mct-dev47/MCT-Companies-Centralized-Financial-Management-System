@@ -4251,7 +4251,7 @@ export const BankManagementPage: React.FC = () => {
         open={isFinance && !!accountToDelete}
         onOpenChange={(open) => { if (!open && !isDeletingAccount) setAccountToDelete(null) }}
         title="Delete Bank Account"
-        description={`Permanently delete ${accountToDelete?.bankName} (${accountToDelete?.accountName})? All associated records will be deleted. This action cannot be undone.`}
+        description={`Permanently delete ${accountToDelete?.bankName} (${accountToDelete?.accountName})? All transactions and linked records under this bank (Sales, Expenses, Petty Cash, Bills, Receivables, Loans, Tenants, Lending, and Dashboard) will be permanently deleted. This action cannot be undone.`}
         confirmLabel="Delete Account"
         cancelLabel="Cancel"
         variant="destructive"
