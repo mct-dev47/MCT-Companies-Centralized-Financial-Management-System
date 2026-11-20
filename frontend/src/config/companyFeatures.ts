@@ -50,34 +50,3 @@ export function isTenantEnabledCompany(companyName?: string | null): boolean {
   if (!companyName) return false
   return isJKPropertyCompany(companyName)
 }
-
-/**
- * Checks whether the given company has the Sales module/tab enabled.
- * FilCap Prime Holdings Corp. uses Lending and JK Property and Ventures uses Tenants instead of Sales.
- */
-export function isSalesEnabledCompany(companyName?: string | null): boolean {
-  if (!companyName) return true
-  return !isFilCapCompany(companyName) && !isJKPropertyCompany(companyName)
-}
-
-/**
- * Determines whether a non-admin user should be blocked from accessing Sales routes
- * for the given active or assigned company.
- */
-export function isSalesBlockedForCompany(
-  role?: string | null,
-  activeCompany?: string | null,
-  assignedCompany?: string | null
-): boolean {
-  const userRole = (role || '').trim().toLowerCase()
-  if (userRole === 'admin') return false
-
-  const targetCompany =
-    activeCompany && activeCompany !== 'All Companies'
-      ? activeCompany
-      : assignedCompany && assignedCompany !== 'All Companies' && !assignedCompany.includes(',')
-        ? assignedCompany
-        : ''
-
-  return Boolean(targetCompany && !isSalesEnabledCompany(targetCompany))
-}
