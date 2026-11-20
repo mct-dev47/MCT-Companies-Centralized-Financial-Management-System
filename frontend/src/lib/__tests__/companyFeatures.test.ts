@@ -1,67 +1,27 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  isSalesEnabledCompany,
-  isSalesBlockedForCompany,
-} from '../../config/companyFeatures.ts'
+import { getSalesDoubleEntryWarning } from '../../config/companyFeatures.ts'
 
-describe('Company-specific Sales page visibility and route guard', () => {
-  const restrictedCompanies = [
-    'JK Property and Ventures Corporation',
-    'JK Property and Ventures',
-    'Filcap Prime Holdings Corp',
-    'FilCap Prime Holdings Corp.',
-  ]
-
-  const nonAdminRoles = [
-    'Finance',
-    'Supervisor',
-    'Audit',
-    'Auditor',
-    'Owner',
-    'Company',
-  ]
-
-  it('disables Sales for JK Property and FilCap companies', () => {
-    for (const company of restrictedCompanies) {
-      assert.equal(isSalesEnabledCompany(company), false)
+describe('Sales double-entry warning for Tenant / Lending companies', () => {
+  it('warns JK Property about tenant rent being counted twice', () => {
+    for (const company of ['JK Property and Ventures Corporation', 'JK Property and Ventures']) {
+      const msg = getSalesDoubleEntryWarning(company)
+      assert.ok(msg, `Expected a warning for ${company}`)
+      assert.match(msg!, /Tenants page/)
     }
   })
 
-  it('enables Sales for other companies and All Companies', () => {
-    assert.equal(isSalesEnabledCompany('MCT Food Corp'), true)
-    assert.equal(isSalesEnabledCompany('All Companies'), true)
-    assert.equal(isSalesEnabledCompany(null), true)
-  })
-
-  it('blocks all non-admin roles from Sales when active company is JK Property or FilCap', () => {
-    for (const role of nonAdminRoles) {
-      for (const company of restrictedCompanies) {
-        assert.equal(
-          isSalesBlockedForCompany(role, company, 'All Companies'),
-          true,
-          `Expected ${role} to be blocked from Sales for ${company}`
-        )
-      }
+  it('warns FilCap about loan collections being counted twice', () => {
+    for (const company of ['Filcap Prime Holdings Corp', 'FilCap Prime Holdings Corp.']) {
+      const msg = getSalesDoubleEntryWarning(company)
+      assert.ok(msg, `Expected a warning for ${company}`)
+      assert.match(msg!, /Lending page/)
     }
   })
 
-  it('blocks all non-admin roles from Sales when assigned company is JK Property or FilCap and activeCompany is empty', () => {
-    for (const role of nonAdminRoles) {
-      for (const company of restrictedCompanies) {
-        assert.equal(
-          isSalesBlockedForCompany(role, '', company),
-          true,
-          `Expected ${role} to be blocked from Sales for assigned company ${company}`
-        )
-      }
-    }
-  })
-
-  it('does not block non-admin roles when active company is All Companies or another company', () => {
-    for (const role of nonAdminRoles) {
-      assert.equal(isSalesBlockedForCompany(role, 'All Companies', 'All Companies'), false)
-      assert.equal(isSalesBlockedForCompany(role, 'MCT Food Corp', 'JK Property and Ventures Corporation'), false)
-    }
+  it('shows no warning for other companies or All Companies', () => {
+    assert.equal(getSalesDoubleEntryWarning('MCT Food Corp'), null)
+    assert.equal(getSalesDoubleEntryWarning('All Companies'), null)
+    assert.equal(getSalesDoubleEntryWarning(null), null)
   })
 })

@@ -52,32 +52,17 @@ export function isTenantEnabledCompany(companyName?: string | null): boolean {
 }
 
 /**
- * Checks whether the given company has the Sales module/tab enabled.
- * FilCap Prime Holdings Corp. uses Lending and JK Property and Ventures uses Tenants instead of Sales.
+ * Sales and Receivables are available to every company, including JK Property (Tenants)
+ * and FilCap (Lending). Those two companies already post rent / loan collections to
+ * Transactions and Bank from their own modules, so recording the same money as a Sale
+ * would count it twice. Returns a warning to show on Sales screens, or null.
  */
-export function isSalesEnabledCompany(companyName?: string | null): boolean {
-  if (!companyName) return true
-  return !isFilCapCompany(companyName) && !isJKPropertyCompany(companyName)
-}
-
-/**
- * Determines whether a non-admin user should be blocked from accessing Sales routes
- * for the given active or assigned company.
- */
-export function isSalesBlockedForCompany(
-  role?: string | null,
-  activeCompany?: string | null,
-  assignedCompany?: string | null
-): boolean {
-  const userRole = (role || '').trim().toLowerCase()
-  if (userRole === 'admin') return false
-
-  const targetCompany =
-    activeCompany && activeCompany !== 'All Companies'
-      ? activeCompany
-      : assignedCompany && assignedCompany !== 'All Companies' && !assignedCompany.includes(',')
-        ? assignedCompany
-        : ''
-
-  return Boolean(targetCompany && !isSalesEnabledCompany(targetCompany))
+export function getSalesDoubleEntryWarning(companyName?: string | null): string | null {
+  if (isJKPropertyCompany(companyName)) {
+    return 'Tenant rent and lease payments are already recorded from the Tenants page. Do not enter them here as Sales, or they will be counted twice in Transactions and Bank.'
+  }
+  if (isFilCapCompany(companyName)) {
+    return 'Loan collections and lending income are already recorded from the Lending page. Do not enter them here as Sales, or they will be counted twice in Transactions and Bank.'
+  }
+  return null
 }

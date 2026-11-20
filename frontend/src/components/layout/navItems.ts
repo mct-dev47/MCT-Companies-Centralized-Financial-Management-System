@@ -15,11 +15,7 @@ import {
   Receipt,
 } from 'lucide-react'
 import type * as React from 'react'
-import {
-  isFilCapCompany,
-  isJKPropertyCompany,
-  isSalesEnabledCompany,
-} from '@/config/companyFeatures'
+import { isFilCapCompany, isJKPropertyCompany } from '@/config/companyFeatures'
 
 export interface NavSubItem {
   id: string
@@ -158,22 +154,16 @@ export interface SidebarNavSections {
 /**
  * Returns the exact role-based and company-based navigation sections according to system specifications:
  *
- * Supervisor & Finance:
+ * Supervisor / Finance / Company (all companies, FilCap and JK included):
  *   Main: Dashboard, Petty Cash, Bills, Transactions
- *   Operations: Sales, Expense, Loan (plus Lending if FilCap, Tenants if JK)
- *
- * FilCap Company / JK Company:
- *   Main: Dashboard, Petty Cash, Bills, Transactions
- *   Operations: Sales, Expense, Loan, Lending (FilCap) / Tenants (JK)
+ *   Operations: Sales, Receivables, Expense, Loan, Bank (plus Lending if FilCap, Tenants if JK)
  *
  * Audit / Company Auditor:
  *   Main: Dashboard, Transactions, Petty Cash, Bills
- *   Operations: Sales, Expense, Loan (plus Lending if FilCap, Tenants if JK)
+ *   Operations: Sales, Receivables, Expense, Loan, Bank (plus Lending if FilCap, Tenants if JK)
  *
  * Admin:
- *   Main: Dashboard, Petty Cash, Bills, Transactions
- *   Operations: Sales, Expense, Loan, Bank Management (plus Lending if FilCap, Tenants if JK)
- *   Administration: Company Management, User Management, Activity Log
+ *   Main only: Company Management, User Management, Activity Log
  */
 export function getSidebarNavSections(
   role?: string | null,
@@ -214,11 +204,9 @@ export function getSidebarNavSections(
   const operationsItems: NavItem[] = []
 
   if (isAudit) {
-    // Audit has view-only oversight over core operations (excluding Sales for FilCap and JK)
-    if (isSalesEnabledCompany(targetCompany)) {
-      operationsItems.push(NAV_ITEM_SALES)
-    }
+    // Audit has view-only oversight over core operations
     operationsItems.push(
+      NAV_ITEM_SALES,
       NAV_ITEM_RECEIVABLES,
       NAV_ITEM_EXPENSE,
       NAV_ITEM_LOAN,
@@ -230,11 +218,8 @@ export function getSidebarNavSections(
       operationsItems.push(NAV_ITEM_TENANTS)
     }
   } else {
-    // Filcap (Lending) and JK do not have the Sales page per business specifications
-    if (isSalesEnabledCompany(targetCompany)) {
-      // Sales and Food Receivables under Operations for Finance, Supervisors
-      operationsItems.push(NAV_ITEM_SALES, NAV_ITEM_RECEIVABLES)
-    }
+    // Sales and Receivables for every company (FilCap and JK included)
+    operationsItems.push(NAV_ITEM_SALES, NAV_ITEM_RECEIVABLES)
     operationsItems.push(NAV_ITEM_EXPENSE, NAV_ITEM_LOAN)
 
     // Bank Management in Operations for Finance and Company accounts

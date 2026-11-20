@@ -6,7 +6,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import {
   isLendingEnabledCompany,
   isTenantEnabledCompany,
-  isSalesBlockedForCompany,
 } from '@/config/companyFeatures'
 
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({
@@ -201,17 +200,12 @@ export const TenantRouteGuard: React.FC<{ children: React.ReactNode }> = ({ chil
 
 export const SalesRouteGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useSession()
-  const { activeCompany } = useCompany()
   const userRole = (user?.role || '').toLowerCase()
 
   if (userRole === 'admin') {
     return <Navigate to="/employee" replace />
   }
 
-  // Block any non-admin role from accessing Sales when the active or assigned company is FilCap or JK
-  if (isSalesBlockedForCompany(user?.role, activeCompany, user?.assignedCompany)) {
-    return <Navigate to="/dashboard" replace />
-  }
-
+  // Sales is open to every company (FilCap and JK included)
   return <>{children}</>
 }

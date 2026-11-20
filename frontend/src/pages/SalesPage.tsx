@@ -99,6 +99,7 @@ import { getRealizedCashForSale } from '@/utils/cashLedgerUtils'
 import { groupTransactionsByDate } from '@/utils/dailyGroupUtils'
 import { receivablesStore, type UtangSale } from '@/services/receivablesStore'
 import { reportAuditSaveFailure } from '@/services/auditReviewApi'
+import { SalesDoubleEntryWarning } from '@/components/dashboard/SalesDoubleEntryWarning'
 
 const ITEMS_PER_PAGE = 50
 
@@ -1129,6 +1130,7 @@ export const SalesPage: React.FC = () => {
             <p className="text-sm sm:text-base text-muted-fg font-normal mt-1">
               Sales records and bank deposits for {displayedCompanyTitle}
             </p>
+            <SalesDoubleEntryWarning company={selectedCompany} className="mt-3" />
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 self-start sm:self-auto">
