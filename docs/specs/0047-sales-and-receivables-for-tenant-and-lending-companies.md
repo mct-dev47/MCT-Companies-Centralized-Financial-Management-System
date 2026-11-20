@@ -17,18 +17,17 @@ Sales recorded for these companies work the same as for every other company:
 Operations: Sales, Receivables, Expense, Loan, Bank, + Lending (FilCap) / Tenants (JK)
 ```
 
-## Double-entry warning
+## Known risk: double entry
 
-Tenant rent and loan collections already post to Transactions and Bank from their own pages. A non-blocking amber notice shows on `/sales` and `/sales/add` for JK and FilCap, telling users not to enter that money again as Sales. Saving is **not** blocked.
+Tenant rent and loan collections already post to Transactions and Bank from their own pages. Entering the same money again as a Sale counts it twice. There is no warning or check for this in the app; staff are expected to keep rent and loan collections out of Sales.
 
 ## Changes
 
 | File | Change |
 |---|---|
-| `frontend/src/config/companyFeatures.ts` | Removed `isSalesEnabledCompany` / `isSalesBlockedForCompany`; added `getSalesDoubleEntryWarning` |
+| `frontend/src/config/companyFeatures.ts` | Removed `isSalesEnabledCompany` / `isSalesBlockedForCompany` |
 | `frontend/src/components/layout/navItems.ts` | Sales + Receivables shown for every company |
 | `frontend/src/components/layout/RouteGuards.tsx` | `SalesRouteGuard` no longer blocks by company (still redirects Admin) |
-| `frontend/src/components/dashboard/SalesDoubleEntryWarning.tsx` | New notice component |
-| `frontend/src/pages/SalesPage.tsx`, `AddTransactionSheetPage.tsx` | Render the notice |
+| `frontend/src/lib/__tests__/companyFeatures.test.ts` | Removed (it only tested the old Sales block) |
 
 The backend never blocked Sales by company, so no backend change was needed.

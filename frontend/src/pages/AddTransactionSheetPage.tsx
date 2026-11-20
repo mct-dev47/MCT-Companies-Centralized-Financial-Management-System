@@ -49,7 +49,6 @@ import { pettyCashService } from '@/services/pettyCashService'
 import { loanService, type CompanyOption } from '@/services/loanService'
 import { useSession } from '@/hooks/useSession'
 import { useCompany } from '@/context/CompanyContext'
-import { SalesDoubleEntryWarning } from '@/components/dashboard/SalesDoubleEntryWarning'
 import { formatPHP } from '@/lib/format'
 import { formatToYYYYMMDD, normalizeDateToYYYYMMDD } from '@/utils/dateUtils'
 import { formatUserFriendlyErrorMessage } from '@/utils/errorUtils'
@@ -3729,8 +3728,6 @@ export const AddTransactionSheetPage: React.FC<AddTransactionSheetPageProps> = (
               </div>
             </div>
           </div>
-
-          {isSales && <SalesDoubleEntryWarning company={selectedCompany} />}
 
           {/* Success Banner */}
           {successBanner && (

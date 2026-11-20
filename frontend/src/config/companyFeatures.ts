@@ -50,19 +50,3 @@ export function isTenantEnabledCompany(companyName?: string | null): boolean {
   if (!companyName) return false
   return isJKPropertyCompany(companyName)
 }
-
-/**
- * Sales and Receivables are available to every company, including JK Property (Tenants)
- * and FilCap (Lending). Those two companies already post rent / loan collections to
- * Transactions and Bank from their own modules, so recording the same money as a Sale
- * would count it twice. Returns a warning to show on Sales screens, or null.
- */
-export function getSalesDoubleEntryWarning(companyName?: string | null): string | null {
-  if (isJKPropertyCompany(companyName)) {
-    return 'Tenant rent and lease payments are already recorded from the Tenants page. Do not enter them here as Sales, or they will be counted twice in Transactions and Bank.'
-  }
-  if (isFilCapCompany(companyName)) {
-    return 'Loan collections and lending income are already recorded from the Lending page. Do not enter them here as Sales, or they will be counted twice in Transactions and Bank.'
-  }
-  return null
-}
