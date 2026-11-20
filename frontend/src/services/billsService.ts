@@ -11,6 +11,9 @@ export interface BillPaymentRecord {
   refNo?: string
   referenceNo?: string
   notes?: string
+  fundingSource?: 'bank' | 'petty_cash' | null
+  bankAccountId?: string | null
+  expenseId?: number | null
   createdAt: string
 }
 
@@ -123,6 +126,9 @@ type BackendPeriod = {
     payment_method: string
     reference_no?: string
     notes?: string
+    funding_source?: 'bank' | 'petty_cash' | null
+    bank_account_id?: string | null
+    expense_id?: number | null
     created_at?: string
   }>
 }
@@ -154,6 +160,9 @@ type BackendBill = {
     payment_method: string
     reference_no?: string
     notes?: string
+    funding_source?: 'bank' | 'petty_cash' | null
+    bank_account_id?: string | null
+    expense_id?: number | null
     created_at?: string
   }>
   next_period_key?: string
@@ -298,6 +307,9 @@ function mapBackendBill(data: BackendBill): BillItem {
     refNo: payment.reference_no,
     referenceNo: payment.reference_no,
     notes: payment.notes,
+    fundingSource: payment.funding_source ?? null,
+    bankAccountId: payment.bank_account_id ?? null,
+    expenseId: payment.expense_id ?? null,
     createdAt: payment.created_at || payment.payment_date,
   }))
 
@@ -604,6 +616,51 @@ export const billsService = {
       return recorded
     } catch (err: any) {
       throw new Error(formatUserFriendlyErrorMessage(err, 'Unable to record payment. Please try again.'))
+    }
+  },
+
+  async updatePayment(
+    id: string,
+    paymentId: string,
+    payment: {
+      paymentDate?: string
+      amount?: number
+      billedAmount?: number
+      paymentMethod?: string
+      referenceNo?: string
+      notes?: string
+      fundingSource?: 'bank' | 'petty_cash' | null
+      bankAccountId?: string | null
+    }
+  ): Promise<BillItem> {
+    try {
+      const response = await fetch(
+        `/api/v1/bills/${encodeURIComponent(id)}/payments/${encodeURIComponent(paymentId)}`,
+        {
+          method: 'PATCH',
+          headers: backendHeaders(),
+          body: JSON.stringify({
+            ...(payment.paymentDate !== undefined ? { payment_date: payment.paymentDate } : {}),
+            ...(payment.amount !== undefined ? { amount: Number(payment.amount) } : {}),
+            ...(payment.billedAmount !== undefined ? { billed_amount: Number(payment.billedAmount) } : {}),
+            ...(payment.paymentMethod !== undefined ? { payment_method: payment.paymentMethod.trim() } : {}),
+            ...(payment.referenceNo !== undefined ? { reference_no: payment.referenceNo.trim() || null } : {}),
+            ...(payment.notes !== undefined ? { notes: payment.notes.trim() || null } : {}),
+            ...(payment.fundingSource !== undefined ? { funding_source: payment.fundingSource } : {}),
+            ...(payment.bankAccountId !== undefined
+              ? { bank_account_id: payment.fundingSource === 'bank' ? payment.bankAccountId || null : null }
+              : {}),
+          }),
+        }
+      )
+      if (!response.ok) {
+        throw await getBackendError(response, 'Unable to update payment record. Please try again.')
+      }
+      const updated = mapBackendBill(await response.json())
+      emitBillsNotificationRefresh()
+      return updated
+    } catch (err: any) {
+      throw new Error(formatUserFriendlyErrorMessage(err, 'Unable to update payment record. Please try again.'))
     }
   },
 

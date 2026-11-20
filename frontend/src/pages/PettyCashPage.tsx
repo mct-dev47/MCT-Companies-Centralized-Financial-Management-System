@@ -82,6 +82,15 @@ import { websocketService } from '@/services/websocketService'
 
 export type PettyCashTransaction = PettyCashLedgerEntry
 
+function isPettyCashAuditLocked(entry: PettyCashTransaction): boolean {
+  if ((entry.auditStatus || '').toLowerCase() === 'verified') return true
+  const s = (entry.status || '').toLowerCase()
+  if (entry.requestType !== 'disbursement' && (s === 'approved' || s === 'reimbursed' || s === 'settled')) {
+    return true
+  }
+  return false
+}
+
 function getAuditableExpenseId(entry: PettyCashTransaction | null | undefined): number | null {
   if (!entry) return null
   if (entry.expenseId != null) return entry.expenseId
@@ -497,6 +506,7 @@ export const PettyCashPage: React.FC = () => {
           particulars: editDescription.trim(),
           ...(editCategory.trim() ? { category: editCategory.trim() } : {}),
         })
+        pettyCashService.invalidateCache({ notifyBell: false })
       } else {
         await pettyCashService.updateTopUp(editEntry.recordId, {
           amount: numericAmount,
@@ -530,6 +540,7 @@ export const PettyCashPage: React.FC = () => {
       if (deleteConfirmEntry.expenseId != null || (deleteConfirmEntry.id && String(deleteConfirmEntry.id).startsWith('expense-'))) {
         const expId = deleteConfirmEntry.expenseId || deleteConfirmEntry.recordId
         await expenseService.deleteExpense(String(expId))
+        pettyCashService.invalidateCache({ notifyBell: false })
       } else {
         await pettyCashService.deleteTopUp(deleteConfirmEntry.recordId)
       }
@@ -3187,7 +3198,7 @@ export const PettyCashPage: React.FC = () => {
               <span>View Details</span>
             </button>
 
-            {!isAudit && !isOwner && (
+            {!isAudit && !isOwner && !isPettyCashAuditLocked(activeMenuPetty) && (
               <>
                 <button
                   type="button"

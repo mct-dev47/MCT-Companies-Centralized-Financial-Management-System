@@ -166,7 +166,7 @@ def test_edit_and_delete_pending_reimbursement(test_env):
     assert db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == reimb_id).first() is None
 
 
-def test_cannot_edit_or_delete_after_finance_endorsement(test_env):
+def test_cannot_edit_or_delete_after_audit_approval(test_env):
     client = test_env["client"]
     db = test_env["db"]
     company = test_env["company"]
@@ -185,26 +185,34 @@ def test_cannot_edit_or_delete_after_finance_endorsement(test_env):
     assert res.status_code == 201
     topup_id = res.json()["topup_id"]
 
-    # 2. Simulate finance endorsement by updating status to Pending Audit Approval
+    # 2. Finance endorsement (Pending Audit Approval) is still editable before audit
     topup = db.query(PettyCashTopUp).filter(PettyCashTopUp.topup_id == topup_id).first()
     topup.status = "Pending Audit Approval"
     topup.endorsed_by = "Finance Officer"
     db.commit()
 
-    # 3. Editing should now be blocked
+    endorsed_edit_res = client.put(
+        f"/api/v1/petty-cash/topups/{topup_id}",
+        json={"amount": 1200.00, "description": "Edited after endorsement"},
+    )
+    assert endorsed_edit_res.status_code == 200
+
+    # 3. Simulate auditor approval -> editing and deleting should now be blocked (409)
+    topup.status = "Approved"
+    db.commit()
+
     edit_res = client.put(
         f"/api/v1/petty-cash/topups/{topup_id}",
         json={"amount": 1500.00, "description": "Attempted edit"},
     )
-    assert edit_res.status_code == 400
-    assert "already been reviewed by finance" in edit_res.text
+    assert edit_res.status_code == 409
+    assert "approved by Audit" in edit_res.text
 
-    # 4. Deleting should also be blocked
     del_res = client.delete(
         f"/api/v1/petty-cash/topups/{topup_id}",
     )
-    assert del_res.status_code == 400
-    assert "already been reviewed by finance" in del_res.text
+    assert del_res.status_code == 409
+    assert "approved by Audit" in del_res.text
 
 
 def test_edit_can_clear_optional_fields(test_env):

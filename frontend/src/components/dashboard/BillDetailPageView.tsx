@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import {
   CheckCircle2,
   Pencil,
@@ -10,6 +11,8 @@ import {
   X,
   Building2,
   ChevronDown,
+  MoreVertical,
+  Trash2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -29,6 +32,7 @@ import { formatPHP } from '@/lib/format'
 import {
   getBillPaymentOptions,
   type BillItem,
+  type BillPaymentRecord,
 } from '@/services/billsService'
 import { formatDisplayDate } from '@/utils/dateUtils'
 import { notifyError, notifyWarning } from '@/utils/errorUtils'
@@ -61,6 +65,8 @@ interface BillDetailPageViewProps {
   onPay: () => void
   onEdit: () => void
   onDelete: () => void
+  onEditPayment?: (payment: BillPaymentRecord) => void
+  onDeletePayment?: (payment: BillPaymentRecord) => void
   onMarkAudit?: (status: 'Verified' | 'Flagged') => void
   isAudit: boolean
 }
@@ -72,6 +78,8 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
   onBack,
   onPay,
   onEdit,
+  onEditPayment,
+  onDeletePayment,
   onMarkAudit,
   isAudit,
 }) => {
@@ -79,18 +87,33 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
   const [ledgerPage, setLedgerPage] = React.useState<number>(1)
   const [isExportDropdownOpen, setIsExportDropdownOpen] = React.useState<boolean>(false)
   const exportDropdownRef = React.useRef<HTMLDivElement>(null)
+  const [openPaymentMenu, setOpenPaymentMenu] = React.useState<{
+    payment: BillPaymentRecord
+    top: number
+    right: number
+    openUpward: boolean
+  } | null>(null)
 
   React.useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null
       if (
         exportDropdownRef.current &&
-        !exportDropdownRef.current.contains(event.target as Node)
+        !exportDropdownRef.current.contains(target)
       ) {
         setIsExportDropdownOpen(false)
       }
+      if (target && !target.closest('.bill-payment-action-menu') && !target.closest('.bill-payment-action-btn')) {
+        setOpenPaymentMenu(null)
+      }
     }
+    const handleScroll = () => setOpenPaymentMenu(null)
     document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
+    window.addEventListener('scroll', handleScroll, true)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      window.removeEventListener('scroll', handleScroll, true)
+    }
   }, [])
 
   React.useEffect(() => {
@@ -157,6 +180,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
       method: string
       referenceNo: string
       notes: string
+      payment: BillPaymentRecord
     }> = []
 
     payments.forEach((p) => {
@@ -175,6 +199,7 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
         method: p.paymentMethod || '—',
         referenceNo: p.referenceNo || p.refNo || '—',
         notes: p.notes || '—',
+        payment: p,
       })
     })
 
@@ -902,12 +927,17 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                     <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3">
                       Remarks
                     </TableHead>
+                    {!isAudit && (onEditPayment || onDeletePayment) && (
+                      <TableHead className="text-[11px] font-bold uppercase text-muted-fg py-2.5 px-3 text-right w-12">
+                        Actions
+                      </TableHead>
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {paginatedLedger.length === 0 ? (
                     <TableEmptyState
-                      colSpan={7}
+                      colSpan={!isAudit && (onEditPayment || onDeletePayment) ? 8 : 7}
                       title="No payment records found"
                       description={
                         searchQuery
@@ -955,6 +985,32 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
                           <TableCell className="py-3 px-3 text-xs text-muted-fg max-w-[220px] truncate" title={entry.notes}>
                             {entry.notes || '—'}
                           </TableCell>
+                          {!isAudit && (onEditPayment || onDeletePayment) && (
+                            <TableCell className="py-3 px-3 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                aria-label="Payment row actions"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  if (openPaymentMenu?.payment.id === entry.id) {
+                                    setOpenPaymentMenu(null)
+                                    return
+                                  }
+                                  const rect = e.currentTarget.getBoundingClientRect()
+                                  const openUpward = rect.bottom + 110 > window.innerHeight
+                                  setOpenPaymentMenu({
+                                    payment: entry.payment,
+                                    top: openUpward ? rect.top - 6 : rect.bottom + 6,
+                                    right: Math.max(12, window.innerWidth - rect.right),
+                                    openUpward,
+                                  })
+                                }}
+                                className="bill-payment-action-btn p-1.5 rounded-lg text-muted-fg hover:text-focus hover:bg-slate-100 transition-colors cursor-pointer"
+                              >
+                                <MoreVertical className="w-4 h-4" />
+                              </button>
+                            </TableCell>
+                          )}
                         </TableRow>
                       )
                     })
@@ -976,6 +1032,51 @@ export const BillDetailPageView: React.FC<BillDetailPageViewProps> = ({
           />
         </div>
       </div>
+
+      {openPaymentMenu &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="bill-payment-action-menu fixed w-36 rounded-xl border border-slate-200 bg-white shadow-2xl p-1 z-[99999] animate-in fade-in-50 zoom-in-95 duration-150"
+            style={{
+              top: `${openPaymentMenu.top}px`,
+              right: `${openPaymentMenu.right}px`,
+              transform: openPaymentMenu.openUpward ? 'translateY(-100%)' : 'none',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {onEditPayment && (
+              <button
+                type="button"
+                onClick={() => {
+                  const target = openPaymentMenu.payment
+                  setOpenPaymentMenu(null)
+                  onEditPayment(target)
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-focus hover:bg-slate-50 transition-colors text-left cursor-pointer"
+              >
+                <Pencil className="w-3.5 h-3.5 text-muted-fg shrink-0" />
+                <span>Edit</span>
+              </button>
+            )}
+            {onDeletePayment && (
+              <button
+                type="button"
+                onClick={() => {
+                  const target = openPaymentMenu.payment
+                  setOpenPaymentMenu(null)
+                  onDeletePayment(target)
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors text-left cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                <span>Delete</span>
+              </button>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   )
 }

@@ -100,6 +100,9 @@ export const BillsPage: React.FC = () => {
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false)
   const [editingBill, setEditingBill] = React.useState<BillItem | null>(null)
+  const [editingPayment, setEditingPayment] = React.useState<import('@/services/billsService').BillPaymentRecord | null>(null)
+  const [deletingPayment, setDeletingPayment] = React.useState<import('@/services/billsService').BillPaymentRecord | null>(null)
+  const [isDeletingPayment, setIsDeletingPayment] = React.useState(false)
   const [paymentBill, setPaymentBill] = React.useState<BillItem | null>(null)
   const [deleteConfirmBill, setDeleteConfirmBill] = React.useState<BillItem | null>(null)
   const [isDeleting, setIsDeleting] = React.useState(false)
@@ -555,8 +558,48 @@ export const BillsPage: React.FC = () => {
           onPay={() => setPaymentBill(selectedDetailBill)}
           onEdit={() => setEditingBill(selectedDetailBill)}
           onDelete={() => setDeleteConfirmBill(selectedDetailBill)}
+          onEditPayment={(payment) => setEditingPayment(payment)}
+          onDeletePayment={(payment) => setDeletingPayment(payment)}
           onMarkAudit={canAuditActions ? (status) => handleMarkBillAudit(selectedDetailBill, status) : undefined}
           isAudit={isAudit}
+        />
+
+        <RecordBillPaymentModal
+          open={Boolean(paymentBill || editingPayment)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPaymentBill(null)
+              setEditingPayment(null)
+            }
+          }}
+          bill={paymentBill || (editingPayment ? selectedDetailBill : null)}
+          editingPayment={editingPayment}
+          onBillPaid={handleBillUpdated}
+        />
+
+        <ConfirmModal
+          open={Boolean(deletingPayment)}
+          onOpenChange={(open) => !open && !isDeletingPayment && setDeletingPayment(null)}
+          title="Delete Bill Payment?"
+          description={`Are you sure you want to delete this payment of ${deletingPayment ? formatPHP(deletingPayment.amount) : ''}? The linked transaction and bank balance will be synced automatically.`}
+          confirmLabel="Delete Payment"
+          loadingLabel="Deleting..."
+          variant="destructive"
+          actionType="delete"
+          isLoading={isDeletingPayment}
+          onConfirm={async () => {
+            if (!selectedDetailBill || !deletingPayment || isDeletingPayment) return
+            setIsDeletingPayment(true)
+            try {
+              const updated = await billsService.deletePayment(selectedDetailBill.id, deletingPayment.id)
+              handleBillUpdated(updated)
+              setDeletingPayment(null)
+            } catch (err: any) {
+              notifyError(err, 'Failed to delete bill payment.')
+            } finally {
+              setIsDeletingPayment(false)
+            }
+          }}
         />
 
         <EditBillModal
@@ -568,12 +611,7 @@ export const BillsPage: React.FC = () => {
           companies={companyList}
         />
 
-        <RecordBillPaymentModal
-          open={Boolean(paymentBill)}
-          onOpenChange={(open) => !open && setPaymentBill(null)}
-          bill={paymentBill}
-          onBillPaid={handleBillUpdated}
-        />
+
 
         <ConfirmModal
           open={Boolean(deleteConfirmBill)}
